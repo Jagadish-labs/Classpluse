@@ -172,6 +172,39 @@
     <!-- TOAST CONTAINER -->
     <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
+    <!-- ASK CLASSPULSE CHAT ASSISTANT (Student Dashboard) -->
+    <div id="assistantWidget" class="assistant-widget hidden">
+      <button id="assistantFabBtn" class="assistant-fab-btn" title="Ask ClassPulse" aria-label="Ask ClassPulse Assistant">
+        <span class="assistant-fab-icon">🤖</span>
+        <span>Ask ClassPulse</span>
+        <span class="assistant-fab-badge"></span>
+      </button>
+
+      <aside id="assistantChatPanel" class="assistant-chat-panel hidden" aria-label="Ask ClassPulse Chat">
+        <div class="assistant-header">
+          <div class="assistant-header-info">
+            <div class="assistant-avatar">🤖</div>
+            <div>
+              <div class="assistant-header-title">Ask ClassPulse</div>
+              <div class="assistant-header-sub">Online • Campus Assistant</div>
+            </div>
+          </div>
+          <button id="assistantCloseBtn" class="assistant-close-btn" title="Close chat" aria-label="Close Assistant">✕</button>
+        </div>
+
+        <div id="assistantMessages" class="assistant-messages">
+          <!-- Populated dynamically via JS -->
+        </div>
+
+        <div class="assistant-footer">
+          <form id="assistantChatForm" class="assistant-form">
+            <input type="text" id="assistantInput" class="assistant-input" placeholder="Ask about classes, attendance, marks..." autocomplete="off">
+            <button type="submit" id="assistantSendBtn" class="assistant-send-btn" title="Send message" aria-label="Send">➤</button>
+          </form>
+        </div>
+      </aside>
+    </div>
+
   </div>
 
   <!-- Main JavaScript Application Logic -->

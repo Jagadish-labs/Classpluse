@@ -2184,39 +2184,58 @@
 
   // 11. NOTIFICATIONS DRAWER / MODAL
   async function openNotificationsModal() {
+    if (!currentUser) {
+      showToast({ title: 'Login Required', message: 'Please log in to view your campus notifications.', type: 'info' });
+      window.location.hash = '#login';
+      return;
+    }
     try {
       const data = await fetchApi('/api/notifications');
+      const unreadCount = data.unreadCount || 0;
       openModal('🔔 Campus Notifications', `
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-          <span style="font-size: 0.78rem; color: var(--text-muted);">Recent updates & academic alerts</span>
-          <button class="btn btn-sm btn-secondary" onclick="window.ClassPulse.markAllNotificationsRead()">Mark all as read</button>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px;">
+          <span style="font-size: 0.78rem; color: var(--text-muted);">
+            ${unreadCount > 0 ? `<strong>${unreadCount}</strong> unread update${unreadCount > 1 ? 's' : ''}` : 'All caught up!'}
+          </span>
+          <button id="markAllNotifsReadBtn" class="btn btn-sm ${unreadCount > 0 ? 'btn-primary' : 'btn-secondary'}" onclick="window.ClassPulse.markAllNotificationsRead()" ${unreadCount === 0 ? 'disabled' : ''}>
+            Mark all as read
+          </button>
         </div>
 
         <div style="display: flex; flex-direction: column; gap: 8px; max-height: 380px; overflow-y: auto;">
           ${data.notifications.length === 0 ? `
-            <div style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 0.82rem;">No notifications yet.</div>
+            <div style="padding: 24px; text-align: center; color: var(--text-muted); font-size: 0.85rem;">No notifications yet.</div>
           ` : data.notifications.map(n => `
-            <div class="class-card" style="padding: 10px 14px; background: ${n.is_read ? 'var(--bg-card)' : 'var(--bg-input)'}; border-left: 3px solid ${n.is_read ? 'var(--border-glass)' : 'var(--primary)'};">
+            <div class="class-card" onclick="window.ClassPulse.clickNotification(${n.id}, '${n.link || ''}')" style="cursor: pointer; padding: 10px 14px; background: ${n.is_read ? 'var(--bg-card)' : 'var(--bg-input)'}; border-left: 3px solid ${n.is_read ? 'var(--border-glass)' : 'var(--primary)'};">
               <div style="display: flex; justify-content: space-between; align-items: baseline;">
-                <strong style="font-size: 0.88rem;">${escapeHtml(n.title)}</strong>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  ${!n.is_read ? '<span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--primary);"></span>' : ''}
+                  <strong style="font-size: 0.88rem;">${escapeHtml(n.title)}</strong>
+                </div>
                 <span style="font-size: 0.7rem; color: var(--text-faint); font-family: var(--font-mono);">${formatRelativeTime(n.created_ts)}</span>
               </div>
-              <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">${escapeHtml(n.message)}</p>
-              ${n.link ? `<a href="${n.link}" onclick="window.ClassPulse.closeModal()" style="font-size: 0.74rem; color: var(--primary); font-weight: 700; margin-top: 4px; display: inline-block;">View →</a>` : ''}
+              <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">${escapeHtml(n.message)}</p>
+              ${n.link ? `<span style="font-size: 0.74rem; color: var(--primary); font-weight: 700; margin-top: 4px; display: inline-block;">View details →</span>` : ''}
             </div>
           `).join('')}
         </div>
       `);
 
-      updateNotifBadge(0);
+      updateNotifBadge(unreadCount);
     } catch (err) {
-      alert(err.message);
+      showToast({ title: 'Error', message: err.message, type: 'urgent' });
     }
   }
 
   async function updateNotifBadge(count = null) {
     const badge = document.getElementById('notifBadge');
     if (!badge) return;
+
+    if (!currentUser) {
+      badge.classList.add('hidden');
+      badge.textContent = '0';
+      return;
+    }
 
     if (count === null) {
       try {
@@ -2228,10 +2247,14 @@
     }
 
     if (count > 0) {
-      badge.textContent = count;
+      badge.textContent = count > 99 ? '99+' : count;
       badge.classList.remove('hidden');
+      badge.classList.remove('badge-bounce');
+      void badge.offsetWidth;
+      badge.classList.add('badge-bounce');
     } else {
       badge.classList.add('hidden');
+      badge.textContent = '0';
     }
   }
 
@@ -2389,6 +2412,9 @@
     const impactLink = document.getElementById('navLinkImpact');
 
     if (currentUser) {
+      if (socket && socket.connected) {
+        socket.emit('joinUser', { uid: currentUser.uid, role: currentUser.role });
+      }
       userArea.classList.remove('hidden');
       authLinks.classList.add('hidden');
       roleTag.textContent = currentUser.role;
@@ -2410,6 +2436,19 @@
       if (myEventsLink) myEventsLink.classList.add('hidden');
       if (adminLink) adminLink.classList.add('hidden');
       if (impactLink) impactLink.classList.add('hidden');
+      const badge = document.getElementById('notifBadge');
+      if (badge) { badge.classList.add('hidden'); badge.textContent = '0'; }
+    }
+
+    const assistantWidget = document.getElementById('assistantWidget');
+    if (assistantWidget) {
+      if (currentUser && currentUser.role === 'STUDENT') {
+        assistantWidget.classList.remove('hidden');
+      } else {
+        assistantWidget.classList.add('hidden');
+        const panel = document.getElementById('assistantChatPanel');
+        if (panel) panel.classList.add('hidden');
+      }
     }
   }
 
@@ -2424,6 +2463,9 @@
       const txt = document.getElementById('navLiveText');
       if (ind) ind.classList.remove('reconnecting');
       if (txt) txt.textContent = 'LIVE';
+      if (currentUser) {
+        socket.emit('joinUser', { uid: currentUser.uid, role: currentUser.role });
+      }
     });
 
     socket.on('disconnect', () => {
@@ -2525,6 +2567,44 @@
         updateNotifBadge();
         const hash = window.location.hash || '#';
         if (hash.startsWith(`#course/${evt.courseId}`) || isHomePath(hash)) router();
+      }
+    });
+
+    // Real-Time Automatic Notifications
+    socket.on('notification:new', (notif) => {
+      if (!currentUser) return;
+      if (notif.uid && notif.uid !== currentUser.uid) return;
+      const isUrgent = notif.type === 'attendance_shortage' || notif.type === 'notice';
+      showToast({ title: notif.title, message: notif.message, type: isUrgent ? 'urgent' : 'info' });
+      AudioEngine.chime(isUrgent ? 'urgent' : 'status');
+
+      const bellBtn = document.getElementById('notifBellBtn');
+      if (bellBtn) {
+        bellBtn.classList.remove('bell-ring');
+        void bellBtn.offsetWidth;
+        bellBtn.classList.add('bell-ring');
+      }
+
+      updateNotifBadge();
+      const modal = document.getElementById('globalModal');
+      const modalTitle = document.getElementById('modalTitle');
+      if (modal && !modal.classList.contains('hidden') && modalTitle && modalTitle.textContent.includes('Notifications')) {
+        openNotificationsModal();
+      }
+    });
+
+    socket.on('notifications:unread_update', (data) => {
+      if (currentUser) {
+        if (data && typeof data.unreadCount === 'number') {
+          updateNotifBadge(data.unreadCount);
+        } else {
+          updateNotifBadge();
+        }
+        const modal = document.getElementById('globalModal');
+        const modalTitle = document.getElementById('modalTitle');
+        if (modal && !modal.classList.contains('hidden') && modalTitle && modalTitle.textContent.includes('Notifications')) {
+          openNotificationsModal();
+        }
       }
     });
 
@@ -3782,14 +3862,163 @@
     },
 
     async markAllNotificationsRead() {
-      await fetchApi('/api/notifications/read', { method: 'POST' });
-      openNotificationsModal();
+      try {
+        await fetchApi('/api/notifications/read', { method: 'POST' });
+        updateNotifBadge(0);
+        openNotificationsModal();
+        showToast({ title: 'Notifications', message: 'All marked as read', type: 'success' });
+      } catch (err) {
+        showToast({ title: 'Error', message: err.message, type: 'urgent' });
+      }
+    },
+
+    async clickNotification(id, link) {
+      try {
+        await fetchApi('/api/notifications/read', { method: 'POST', body: JSON.stringify({ id }) });
+        updateNotifBadge();
+        if (link) {
+          closeModal();
+          window.location.hash = link;
+        } else {
+          openNotificationsModal();
+        }
+      } catch (err) {
+        if (link) {
+          closeModal();
+          window.location.hash = link;
+        }
+      }
     },
 
     closeModal() {
       closeModal();
     }
   };
+
+  // --- Ask ClassPulse Assistant Chat Logic ---
+  function formatAssistantText(text) {
+    if (!text) return '';
+    let safe = escapeHtml(text);
+    safe = safe.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    safe = safe.replace(/\n/g, '<br>');
+    return safe;
+  }
+
+  function appendAssistantBubble(sender, text, suggestions) {
+    const msgsContainer = document.getElementById('assistantMessages');
+    if (!msgsContainer) return;
+
+    const msgDiv = document.createElement('div');
+    msgDiv.className = `assistant-msg msg-${sender}`;
+
+    const bubbleDiv = document.createElement('div');
+    bubbleDiv.className = 'assistant-bubble';
+    bubbleDiv.innerHTML = formatAssistantText(text);
+    msgDiv.appendChild(bubbleDiv);
+
+    if (suggestions && suggestions.length > 0) {
+      const suggDiv = document.createElement('div');
+      suggDiv.className = 'assistant-suggestions';
+      suggestions.forEach(chipText => {
+        const chipBtn = document.createElement('button');
+        chipBtn.type = 'button';
+        chipBtn.className = 'assistant-chip';
+        chipBtn.textContent = chipText;
+        chipBtn.addEventListener('click', () => {
+          sendAssistantMessage(chipText);
+        });
+        suggDiv.appendChild(chipBtn);
+      });
+      msgDiv.appendChild(suggDiv);
+    }
+
+    msgsContainer.appendChild(msgDiv);
+    msgsContainer.scrollTop = msgsContainer.scrollHeight;
+  }
+
+  async function sendAssistantMessage(userText) {
+    const text = (userText || '').trim();
+    if (!text) return;
+
+    const msgsContainer = document.getElementById('assistantMessages');
+    const inputEl = document.getElementById('assistantInput');
+    const sendBtn = document.getElementById('assistantSendBtn');
+
+    appendAssistantBubble('user', text);
+    if (inputEl) inputEl.value = '';
+    if (inputEl) inputEl.disabled = true;
+    if (sendBtn) sendBtn.disabled = true;
+
+    // Show typing indicator
+    const typingEl = document.createElement('div');
+    typingEl.className = 'assistant-typing';
+    typingEl.id = 'assistantTypingIndicator';
+    typingEl.innerHTML = `
+      <span class="assistant-dot"></span>
+      <span class="assistant-dot"></span>
+      <span class="assistant-dot"></span>
+    `;
+    msgsContainer.appendChild(typingEl);
+    msgsContainer.scrollTop = msgsContainer.scrollHeight;
+
+    try {
+      const res = await fetchApi('/api/assistant', {
+        method: 'POST',
+        body: JSON.stringify({ message: text })
+      });
+
+      const typing = document.getElementById('assistantTypingIndicator');
+      if (typing) typing.remove();
+
+      appendAssistantBubble('assistant', res.reply, res.suggestions);
+    } catch (err) {
+      const typing = document.getElementById('assistantTypingIndicator');
+      if (typing) typing.remove();
+      appendAssistantBubble('assistant', 'Sorry, I had trouble processing that request: ' + (err.message || 'Network error'), [
+        "What should I do right now?",
+        "Check my attendance",
+        "Pending assignments"
+      ]);
+    } finally {
+      if (inputEl) {
+        inputEl.disabled = false;
+        inputEl.focus();
+      }
+      if (sendBtn) sendBtn.disabled = false;
+    }
+  }
+
+  function initAssistantChat() {
+    const msgsContainer = document.getElementById('assistantMessages');
+    if (msgsContainer && msgsContainer.children.length === 0) {
+      const studentName = (currentUser && currentUser.name) ? currentUser.name : 'Student';
+      appendAssistantBubble(
+        'assistant',
+        `Hi **${studentName}**! 👋 I'm your ClassPulse assistant.\n\nAsk me anything about your current class, attendance shortage, deadlines, marks, or campus events.`,
+        [
+          "What should I do right now?",
+          "Check my attendance",
+          "Pending assignments"
+        ]
+      );
+    }
+  }
+
+  function toggleAssistantChat() {
+    const panel = document.getElementById('assistantChatPanel');
+    if (!panel) return;
+    const isHidden = panel.classList.contains('hidden');
+    if (isHidden) {
+      panel.classList.remove('hidden');
+      initAssistantChat();
+      const inputEl = document.getElementById('assistantInput');
+      if (inputEl) setTimeout(() => inputEl.focus(), 100);
+      const msgs = document.getElementById('assistantMessages');
+      if (msgs) msgs.scrollTop = msgs.scrollHeight;
+    } else {
+      panel.classList.add('hidden');
+    }
+  }
 
   // --- Bootstrap ---
   async function init() {
@@ -3883,6 +4112,27 @@
           errEl.textContent = err.message;
           errEl.classList.remove('hidden');
         }
+      });
+    }
+
+    // Ask ClassPulse Assistant listeners
+    const assistantFabBtn = document.getElementById('assistantFabBtn');
+    if (assistantFabBtn) {
+      assistantFabBtn.addEventListener('click', toggleAssistantChat);
+    }
+    const assistantCloseBtn = document.getElementById('assistantCloseBtn');
+    if (assistantCloseBtn) {
+      assistantCloseBtn.addEventListener('click', () => {
+        const panel = document.getElementById('assistantChatPanel');
+        if (panel) panel.classList.add('hidden');
+      });
+    }
+    const assistantChatForm = document.getElementById('assistantChatForm');
+    if (assistantChatForm) {
+      assistantChatForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const input = document.getElementById('assistantInput');
+        if (input) sendAssistantMessage(input.value);
       });
     }
 

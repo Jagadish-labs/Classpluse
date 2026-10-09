@@ -12,6 +12,7 @@ const QRCode = require('qrcode');
 const jwt = require('jsonwebtoken');
 
 const { db, seedDatabase, getImpactMetrics, recordImpactUpdate } = require('./db');
+const { resolveActiveClass, computeActionLine, getDirectiveSummary } = require('./directive');
 const {
   JWT_SECRET,
   COOKIE_NAME,
@@ -299,6 +300,182 @@ const STATUS_LABELS = {
   resched: 'Rescheduled'
 };
 
+// ============================================================================
+// AUTOMATIC REAL-TIME NOTIFICATIONS SYSTEM
+// ============================================================================
+
+function notifyEnrolledStudentsClassStatus(item, st, note) {
+  if (!item) return;
+  let studentIds = [];
+  if (item.course_id) {
+    const rows = db.prepare('SELECT student_id FROM enrollments WHERE course_id = ?').all(item.course_id);
+    studentIds = rows.map(r => r.student_id);
+  }
+  if (!studentIds.length) {
+    studentIds = db.prepare("SELECT uid FROM users WHERE role = 'STUDENT'").all().map(r => r.uid);
+  }
+
+  const statusLabel = STATUS_LABELS[st] || st;
+  let actionText = '';
+  if (st === 'absent' || st === 'cancelled') {
+    actionText = 'You are free.';
+  } else if (st === 'delayed') {
+    actionText = `Please wait near ${item.room}.`;
+  } else if (st === 'sub') {
+    actionText = `Substitute in ${item.room}.`;
+  } else if (st === 'resched') {
+    actionText = 'Check new slot.';
+  } else if (st === 'ongoing') {
+    actionText = `Go to ${item.room}.`;
+  }
+
+  const notePart = note ? ` (${note})` : '';
+  const message = `${item.sub}: ${statusLabel}. ${actionText}${notePart}`.trim();
+  const title = `⏰ Class Update: ${item.sub}`;
+  const link = '#/';
+  const now = Date.now();
+
+  const insertStmt = db.prepare(`
+    INSERT INTO notifications (uid, title, message, link, is_read, created_ts, type, course_id)
+    VALUES (?, ?, ?, ?, 0, ?, 'class_status', ?)
+  `);
+
+  for (const stuId of studentIds) {
+    const res = insertStmt.run(stuId, title, message, link, now, item.course_id || null);
+    const notifObj = {
+      id: res.lastInsertRowid,
+      uid: stuId,
+      title,
+      message,
+      link,
+      is_read: 0,
+      created_ts: now,
+      type: 'class_status',
+      course_id: item.course_id || null
+    };
+    io.to(`user:${stuId}`).emit('notification:new', notifObj);
+    io.to(`user:${stuId}`).emit('notifications:unread_update', {});
+  }
+  io.to('role:STUDENT').emit('notifications:unread_update', {});
+}
+
+function notifyStudentSubmissionGraded(sub, pts, cleanFeedback) {
+  const now = Date.now();
+  const title = `📝 Grade Returned: ${sub.assignment_title}`;
+  const message = `Score: ${pts}/${sub.max_points} pts${cleanFeedback ? ' - ' + cleanFeedback : ''}`;
+  const link = `#course/${sub.course_id}?tab=classwork`;
+
+  const res = db.prepare(`
+    INSERT INTO notifications (uid, title, message, link, is_read, created_ts, type, course_id)
+    VALUES (?, ?, ?, ?, 0, ?, 'grade_returned', ?)
+  `).run(sub.student_id, title, message, link, now, sub.course_id);
+
+  const notifObj = {
+    id: res.lastInsertRowid,
+    uid: sub.student_id,
+    title,
+    message,
+    link,
+    is_read: 0,
+    created_ts: now,
+    type: 'grade_returned',
+    course_id: sub.course_id
+  };
+
+  io.to(`user:${sub.student_id}`).emit('notification:new', notifObj);
+  io.to(`user:${sub.student_id}`).emit('notifications:unread_update', {});
+  return notifObj;
+}
+
+function checkAttendanceShortageForStudents(courseId, studentIds) {
+  if (!courseId || !Array.isArray(studentIds) || !studentIds.length) return;
+  const course = db.prepare('SELECT id, code, name FROM courses WHERE id = ? OR code = ?').get(courseId, courseId);
+  if (!course) return;
+
+  const now = Date.now();
+  const insertStmt = db.prepare(`
+    INSERT INTO notifications (uid, title, message, link, is_read, created_ts, type, course_id)
+    VALUES (?, ?, ?, ?, 0, ?, 'attendance_shortage', ?)
+  `);
+
+  for (const stuId of studentIds) {
+    const allRecords = db.prepare(`
+      SELECT r.status
+      FROM attendance_records r
+      JOIN attendance_sessions s ON r.session_id = s.id
+      WHERE (s.course_id = ? OR s.course_id = ?) AND r.student_id = ?
+    `).all(course.id, course.code, stuId);
+
+    const total = allRecords.length;
+    if (total === 0) continue;
+
+    const present = allRecords.filter(r => r.status === 'Present' || r.status === 'Late').length;
+    const percentage = Math.round((present / total) * 100);
+
+    if (percentage < 75) {
+      // Notify once per subject (no duplicates)
+      const existing = db.prepare(`
+        SELECT 1 FROM notifications
+        WHERE uid = ? AND type = 'attendance_shortage' AND (course_id = ? OR course_id = ?)
+      `).get(stuId, course.id, course.code);
+
+      if (!existing) {
+        const needed = Math.ceil((0.75 * total - present) / 0.25);
+        const title = `⚠️ Attendance Shortage: ${course.code}`;
+        const message = `Your attendance in ${course.name} (${course.code}) dropped to ${percentage}%. You need ${needed} consecutive classes to reach 75%.`;
+        const link = '#/';
+
+        const res = insertStmt.run(stuId, title, message, link, now, course.id);
+        const notifObj = {
+          id: res.lastInsertRowid,
+          uid: stuId,
+          title,
+          message,
+          link,
+          is_read: 0,
+          created_ts: now,
+          type: 'attendance_shortage',
+          course_id: course.id
+        };
+
+        io.to(`user:${stuId}`).emit('notification:new', notifObj);
+        io.to(`user:${stuId}`).emit('notifications:unread_update', {});
+      }
+    }
+  }
+}
+
+function notifyAllStudentsNotice(noticeText) {
+  if (!noticeText || !noticeText.trim()) return;
+  const students = db.prepare("SELECT uid FROM users WHERE role = 'STUDENT'").all();
+  const now = Date.now();
+  const title = '📢 Campus Notice';
+  const message = noticeText.trim();
+  const link = '#/';
+
+  const insertStmt = db.prepare(`
+    INSERT INTO notifications (uid, title, message, link, is_read, created_ts, type)
+    VALUES (?, ?, ?, ?, 0, ?, 'notice')
+  `);
+
+  for (const stu of students) {
+    const res = insertStmt.run(stu.uid, title, message, link, now);
+    const notifObj = {
+      id: res.lastInsertRowid,
+      uid: stu.uid,
+      title,
+      message,
+      link,
+      is_read: 0,
+      created_ts: now,
+      type: 'notice'
+    };
+    io.to(`user:${stu.uid}`).emit('notification:new', notifObj);
+    io.to(`user:${stu.uid}`).emit('notifications:unread_update', {});
+  }
+  io.to('role:STUDENT').emit('notifications:unread_update', {});
+}
+
 // GET /api/timetable/today
 app.get('/api/timetable/today', authenticate, (req, res) => {
   const state = getFullTimetableState();
@@ -334,6 +511,8 @@ app.post('/api/timetable/status', authenticate, requireRole('FACULTY', 'ADMIN'),
   addStatusLog(`${item.sub}: ${STATUS_LABELS[st]}${noteSuffix}`);
   recordImpactUpdate(st, item.id, item.course_id, item.sub);
 
+  notifyEnrolledStudentsClassStatus(item, st, cleanNote);
+
   const updatedState = getFullTimetableState();
   persistDataJson(updatedState);
   io.emit('state:update', updatedState);
@@ -353,14 +532,15 @@ app.post('/api/timetable/status', authenticate, requireRole('FACULTY', 'ADMIN'),
 
 // POST /api/timetable/notice (Faculty or Admin)
 app.post('/api/timetable/notice', authenticate, requireRole('FACULTY', 'ADMIN'), (req, res) => {
-  const { text } = req.body;
-  const clean = sanitize(text, 140);
+  const clean = sanitize(req.body.notice || req.body.text || '', 140);
   if (!clean) {
     return res.status(400).json({ error: 'Notice text is required' });
   }
 
   db.prepare('INSERT OR REPLACE INTO system_state (key, value) VALUES (?, ?)').run('notice', clean);
   addStatusLog(`Urgent Notice: ${clean}`);
+
+  notifyAllStudentsNotice(clean);
 
   const updatedState = getFullTimetableState();
   io.emit('state:update', updatedState);
@@ -542,6 +722,7 @@ app.post('/api/attendance/session', authenticate, requireRole('FACULTY', 'ADMIN'
   });
 
   const sessionId = markTx();
+  checkAttendanceShortageForStudents(course_id, records.map(r => r.student_id));
   res.json({ success: true, message: 'Attendance saved successfully', sessionId });
 });
 
@@ -1197,17 +1378,8 @@ app.post('/api/submissions/:submissionId/grade', authenticate, requireRole('FACU
     WHERE id = ?
   `).run(pts, cleanFeedback, Date.now(), subId);
 
-  // Create notification for student
-  db.prepare(`
-    INSERT INTO notifications (uid, title, message, link, created_ts)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(
-    sub.student_id,
-    `📝 Grade Returned: ${sub.assignment_title}`,
-    `Score: ${pts}/${sub.max_points} pts${cleanFeedback ? ' - ' + cleanFeedback : ''}`,
-    `#course/${sub.course_id}?tab=classwork`,
-    Date.now()
-  );
+  // Create notification and emit in real time to student
+  notifyStudentSubmissionGraded(sub, pts, cleanFeedback);
 
   io.emit('submission:graded', {
     submissionId: subId,
@@ -1287,6 +1459,238 @@ app.get('/api/student/dashboard-summary', authenticate, requireRole('STUDENT'), 
   });
 
   res.json({ todo, alerts });
+});
+
+// ============================================================================
+// STUDENT CHAT ASSISTANT ("Ask ClassPulse" - Rule-Based)
+// ============================================================================
+app.post('/api/assistant', authenticate, requireRole('STUDENT'), (req, res) => {
+  const rawMsg = (req.body && req.body.message) ? String(req.body.message) : '';
+  const msg = rawMsg.toLowerCase().trim();
+
+  let reply = '';
+  let suggestions = [];
+
+  // Keywords lists for intent matching
+  const attendanceKeywords = ['attendance', 'short', '75', 'bunk'];
+  const assignmentKeywords = ['assignment', 'deadline', 'due', 'pending', 'todo'];
+  const marksKeywords = ['marks', 'grade', 'result', 'score'];
+  const eventKeywords = ['event', 'seat', 'register'];
+  const rightNowKeywords = ['right now', 'what should i do', 'class', 'today'];
+
+  if (attendanceKeywords.some(k => msg.includes(k))) {
+    // Intent 2: Attendance % per subject, flag < 75%, and consecutive classes needed
+    const courses = db.prepare(`
+      SELECT c.id, c.code, c.name, u.name as faculty_name
+      FROM courses c
+      JOIN enrollments e ON c.id = e.course_id
+      JOIN users u ON c.faculty_id = u.uid
+      WHERE e.student_id = ?
+    `).all(req.user.uid);
+
+    if (courses.length === 0) {
+      reply = "You are not enrolled in any courses yet.";
+    } else {
+      const summary = courses.map(c => {
+        const records = db.prepare(`
+          SELECT r.status
+          FROM attendance_records r
+          JOIN attendance_sessions s ON r.session_id = s.id
+          WHERE s.course_id = ? AND r.student_id = ?
+        `).all(c.id, req.user.uid);
+
+        const total = records.length;
+        const present = records.filter(r => r.status === 'Present' || r.status === 'Late').length;
+        const percentage = total > 0 ? Math.round((present / total) * 100) : 100;
+        let neededFor75 = 0;
+        if (percentage < 75 && total > 0) {
+          neededFor75 = Math.ceil((0.75 * total - present) / 0.25);
+        }
+        return {
+          code: c.code,
+          name: c.name,
+          total,
+          present,
+          percentage,
+          belowThreshold: percentage < 75 && total > 0,
+          neededFor75
+        };
+      });
+
+      const shortages = summary.filter(s => s.belowThreshold);
+      const lines = summary.map(s => {
+        if (s.belowThreshold) {
+          return `⚠️ **${s.name} (${s.code})**: **${s.percentage}%** (${s.present}/${s.total} attended)\n   🚨 **Shortage Alert!** You need **${s.neededFor75}** consecutive classes to reach 75%.`;
+        } else {
+          return `✅ **${s.name} (${s.code})**: **${s.percentage}%** (${s.present}/${s.total} attended)`;
+        }
+      });
+
+      const header = shortages.length > 0
+        ? `📊 **Attendance Summary (${shortages.length} Shortage Alert${shortages.length > 1 ? 's' : ''}):**\n\n`
+        : `📊 **Attendance Summary (All ≥ 75%):**\n\n`;
+
+      reply = header + lines.join('\n\n');
+    }
+
+    suggestions = [
+      "What should I do right now?",
+      "Pending assignments",
+      "Latest grades"
+    ];
+
+  } else if (assignmentKeywords.some(k => msg.includes(k))) {
+    // Intent 3: Pending assignments sorted by due date
+    const pending = db.prepare(`
+      SELECT a.id, a.title, a.due_date, a.max_points, c.code, c.name as course_name, s.status, c.id as course_id
+      FROM assignments a
+      JOIN courses c ON a.course_id = c.id
+      JOIN enrollments e ON c.id = e.course_id
+      LEFT JOIN submissions s ON a.id = s.assignment_id AND s.student_id = ?
+      WHERE e.student_id = ? AND (s.status IS NULL OR s.status = 'Assigned')
+      ORDER BY a.due_date ASC
+    `).all(req.user.uid, req.user.uid);
+
+    if (pending.length === 0) {
+      reply = "🎉 **All caught up!** You have no pending assignments due right now.";
+    } else {
+      const now = Date.now();
+      const list = pending.map((a, i) => {
+        const d = new Date(a.due_date);
+        const isOverdue = now > d.getTime();
+        const isSoon = !isOverdue && (d.getTime() - now) < (24 * 3600 * 1000);
+        const tag = isOverdue ? '🚨 Overdue' : isSoon ? '⏰ Due Soon' : '📝 Assigned';
+        const dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        return `${i + 1}. **${a.title}** (${a.course_name} - ${a.code})\n   • Due: **${dateStr}** [${tag}]\n   • Max Points: ${a.max_points}`;
+      });
+      reply = `📝 **Pending Assignments (${pending.length}):**\n\n` + list.join('\n\n');
+    }
+
+    suggestions = [
+      "What should I do right now?",
+      "Check my attendance",
+      "Latest grades"
+    ];
+
+  } else if (marksKeywords.some(k => msg.includes(k))) {
+    // Intent 4: Latest grades
+    const publishedMarks = db.prepare(`
+      SELECT a.name, a.max_marks, m.score, c.code, c.name as course_name, a.created_at
+      FROM marks m
+      JOIN assessments a ON m.assessment_id = a.id
+      JOIN courses c ON a.course_id = c.id
+      JOIN enrollments e ON c.id = e.course_id
+      WHERE m.student_id = ? AND e.student_id = ? AND a.published = 1
+      ORDER BY a.created_at DESC, a.id DESC
+      LIMIT 10
+    `).all(req.user.uid, req.user.uid);
+
+    const gradedSubmissions = db.prepare(`
+      SELECT a.title as name, a.max_points as max_marks, s.points as score, c.code, c.name as course_name, s.graded_at as created_at, s.feedback
+      FROM submissions s
+      JOIN assignments a ON s.assignment_id = a.id
+      JOIN courses c ON a.course_id = c.id
+      WHERE s.student_id = ? AND s.status = 'Graded'
+      ORDER BY s.graded_at DESC
+      LIMIT 10
+    `).all(req.user.uid);
+
+    const allGrades = [
+      ...publishedMarks.map(m => ({ ...m, type: 'Assessment' })),
+      ...gradedSubmissions.map(s => ({ ...s, type: 'Assignment' }))
+    ].sort((a, b) => (b.created_at || 0) - (a.created_at || 0)).slice(0, 10);
+
+    if (allGrades.length === 0) {
+      reply = "📊 No published assessment marks or graded assignments found yet.";
+    } else {
+      const items = allGrades.map((g, i) => {
+        const pct = g.max_marks > 0 ? Math.round((g.score / g.max_marks) * 100) : 0;
+        const feedbackStr = g.feedback ? `\n   • Feedback: "${g.feedback}"` : '';
+        return `${i + 1}. **${g.name}** (${g.code})\n   • Type: ${g.type} | Score: **${g.score}/${g.max_marks}** (${pct}%)${feedbackStr}`;
+      });
+      reply = `📊 **Latest Grades & Results:**\n\n` + items.join('\n\n');
+    }
+
+    suggestions = [
+      "Check my attendance",
+      "Pending assignments",
+      "What should I do right now?"
+    ];
+
+  } else if (eventKeywords.some(k => msg.includes(k))) {
+    // Intent 5: Upcoming events with seats left
+    const now = Date.now();
+    const rows = db.prepare(`
+      SELECT * FROM events
+      WHERE status IN ('upcoming', 'live') AND end_ts >= ?
+      ORDER BY start_ts ASC
+    `).all(now);
+
+    const enriched = rows.map(r => enrichEventForUser(r, req.user.uid));
+    const withSeats = enriched.filter(e => e.seatsLeft === null || e.seatsLeft > 0);
+
+    if (withSeats.length === 0) {
+      reply = "🎟️ No upcoming events with open seats right now. Check back soon!";
+    } else {
+      const items = withSeats.slice(0, 5).map((e, i) => {
+        const dateStr = new Date(e.start_ts).toLocaleDateString([], {
+          weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+        });
+        const seatsStr = e.seatsLeft !== null ? `${e.seatsLeft} seat(s) left` : 'Unlimited seats';
+        const regStr = e.isRegistered ? ' • ✅ Registered' : '';
+        return `${i + 1}. **${e.title}** [${e.category}]\n   • 📍 Venue: ${e.venue} | ⏰ ${dateStr}\n   • 🎟️ Availability: **${seatsStr}**${regStr}`;
+      });
+      reply = `🎉 **Upcoming Events with Seats Left:**\n\n` + items.join('\n\n');
+    }
+
+    suggestions = [
+      "What should I do right now?",
+      "Check my attendance",
+      "Pending assignments"
+    ];
+
+  } else if (rightNowKeywords.some(k => msg.includes(k))) {
+    // Intent 1: Current class status & hero directive text (reuses directive logic)
+    const state = getFullTimetableState();
+    const { cls, mode, action } = getDirectiveSummary(state);
+
+    if (mode === 'finished') {
+      reply = `🎉 **DAY COMPLETE**: All scheduled classes have finished for today.\n\n📋 **Directive**: ${action.primary} ${action.secondary || ''}`;
+    } else if (!cls || mode === 'empty') {
+      reply = `📅 No active classes scheduled today.\n\n📋 **Directive**: ${action.primary}`;
+    } else {
+      const label = STATUS_LABELS[cls.st] || cls.st;
+      reply = `⏰ **Current Class: ${cls.sub}** (${cls.s} - ${cls.e})\n` +
+              `📍 **Room**: ${cls.room} | 👨‍🏫 **Faculty**: ${cls.fac}\n` +
+              `● **Status**: ${label}${cls.note ? ` ("${cls.note}")` : ''}\n\n` +
+              `📋 **Directive**: ${action.primary}\n` +
+              (action.secondary ? `${action.secondary}` : '');
+    }
+
+    suggestions = [
+      "Check my attendance",
+      "Pending assignments",
+      "Upcoming events"
+    ];
+
+  } else {
+    // Fallback: friendly message listing capabilities
+    reply = "Hi! I'm your **ClassPulse Assistant**. I can help you with:\n\n" +
+      "• ⏰ **Right now directive & class status** (e.g. \"What should I do right now?\", \"today's class\")\n" +
+      "• 📊 **Attendance shortage & percentage** (e.g. \"Check my attendance\", \"Do I have short attendance?\")\n" +
+      "• 📝 **Pending assignments & deadlines** (e.g. \"Pending assignments\", \"Upcoming due dates\")\n" +
+      "• 📈 **Latest grades & marks** (e.g. \"Show my grades\", \"Latest marks\")\n" +
+      "• 🎟️ **Campus events & seat availability** (e.g. \"Upcoming events with seats left\")\n\n" +
+      "How can I help you today?";
+
+    suggestions = [
+      "What should I do right now?",
+      "Check my attendance",
+      "Pending assignments"
+    ];
+  }
+
+  res.json({ reply, suggestions });
 });
 
 // ============================================================================
@@ -1839,13 +2243,15 @@ app.get('/api/notifications', authenticate, (req, res) => {
 
 // POST /api/notifications/read
 app.post('/api/notifications/read', authenticate, (req, res) => {
-  const { id } = req.body;
+  const { id } = req.body || {};
   if (id) {
     db.prepare('UPDATE notifications SET is_read = 1 WHERE id = ? AND uid = ?').run(Number(id), req.user.uid);
   } else {
     db.prepare('UPDATE notifications SET is_read = 1 WHERE uid = ?').run(req.user.uid);
   }
-  res.json({ success: true });
+  const unreadCount = db.prepare('SELECT count(*) as count FROM notifications WHERE uid = ? AND is_read = 0').get(req.user.uid).count;
+  io.to(`user:${req.user.uid}`).emit('notifications:unread_update', { unreadCount });
+  res.json({ success: true, unreadCount });
 });
 
 // ============================================================================
@@ -2134,6 +2540,7 @@ app.post('/api/admin/reset-demo', authenticate, requireRole('ADMIN'), (req, res)
     io.emit('events:updated', {});
     io.emit('notice:update', { notice: '' });
     io.emit('impact:updated', getImpactMetrics());
+    io.emit('notifications:unread_update', {});
     res.json({ success: true, message: 'Clean seed data restored successfully in 5 seconds.' });
   } catch (err) {
     console.error('Error resetting demo data:', err);
@@ -2304,6 +2711,17 @@ function requireSocketStaff(socket, cb, adminOnly) {
 }
 
 io.on('connection', (socket) => {
+  const socketUser = userFromSocket(socket);
+  if (socketUser) {
+    socket.join(`user:${socketUser.uid}`);
+    socket.join(`role:${socketUser.role}`);
+  }
+
+  socket.on('joinUser', ({ uid, role }) => {
+    if (uid) socket.join(`user:${uid}`);
+    if (role) socket.join(`role:${role}`);
+  });
+
   const state = getFullTimetableState();
   socket.emit('state:update', state);
   socket.emit('state', state);
@@ -2337,6 +2755,7 @@ io.on('connection', (socket) => {
       db.prepare('UPDATE timetable SET st = ?, note = ?, ts = ? WHERE id = ?').run(st, cleanNote, now, item.id);
       addStatusLog(`${item.sub}: ${STATUS_LABELS[st] || st}${cleanNote ? ' (' + cleanNote + ')' : ''}`);
       recordImpactUpdate(st, item.id, item.course_id, item.sub);
+      notifyEnrolledStudentsClassStatus(item, st, cleanNote);
     }
     const updated = getFullTimetableState();
     persistDataJson(updated);
@@ -2355,6 +2774,7 @@ io.on('connection', (socket) => {
     const clean = sanitize(text, 140);
     db.prepare('INSERT OR REPLACE INTO system_state (key, value) VALUES (?, ?)').run('notice', clean);
     addStatusLog(`Urgent Notice: ${clean}`);
+    notifyAllStudentsNotice(clean);
     const updated = getFullTimetableState();
     persistDataJson(updated);
     io.emit('state:update', updated);

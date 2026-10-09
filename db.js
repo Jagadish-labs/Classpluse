@@ -237,6 +237,8 @@ function initSchema() {
       link TEXT,
       is_read INTEGER DEFAULT 0,
       created_ts INTEGER NOT NULL,
+      type TEXT,
+      course_id TEXT,
       FOREIGN KEY (uid) REFERENCES users(uid) ON DELETE CASCADE
     );
 
@@ -254,11 +256,16 @@ function initSchema() {
 
   try { db.exec('ALTER TABLE roster ADD COLUMN is_organizer INTEGER DEFAULT 0'); } catch(e) {}
   try { db.exec('ALTER TABLE users ADD COLUMN is_organizer INTEGER DEFAULT 0'); } catch(e) {}
+  try { db.exec('ALTER TABLE notifications ADD COLUMN type TEXT'); } catch(e) {}
+  try { db.exec('ALTER TABLE notifications ADD COLUMN course_id TEXT'); } catch(e) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_notifications_uid_isread ON notifications(uid, is_read)'); } catch(e) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_notifications_uid_type ON notifications(uid, type, course_id)'); } catch(e) {}
 }
 
 function seedDatabase(force = false) {
   const count = db.prepare('SELECT count(*) as count FROM roster').get().count;
   if (count > 0 && !force) {
+    seedNotificationsIfEmpty();
     seedEventsIfEmpty();
     seedImpactIfEmpty();
     return;
@@ -519,6 +526,69 @@ function seedDatabase(force = false) {
     });
   });
 
+  // 15. SEED DEMO NOTIFICATIONS
+  const insertNotif = db.prepare(`
+    INSERT INTO notifications (uid, title, message, link, is_read, created_ts, type, course_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const demoNotifs = [
+    {
+      uid: 'STU001',
+      title: '⏰ Class Update: Data Structures',
+      message: 'Data Structures: Faculty Absent. You are free.',
+      link: '#/',
+      is_read: 0,
+      ts: now - 15 * 60 * 1000,
+      type: 'class_status',
+      course_id: 'CS101'
+    },
+    {
+      uid: 'STU001',
+      title: '📝 Grade Returned: Assignment 1: Problem Set',
+      message: 'Score: 85/100 pts - Good job.',
+      link: '#course/CS101?tab=classwork',
+      is_read: 0,
+      ts: now - 2 * 3600 * 1000,
+      type: 'grade_returned',
+      course_id: 'CS101'
+    },
+    {
+      uid: 'STU001',
+      title: '📢 Campus Notice',
+      message: 'Auditorium doors open now for Tech Heist Hackathon Finale.',
+      link: '#/',
+      is_read: 1,
+      ts: now - 4 * 3600 * 1000,
+      type: 'notice',
+      course_id: null
+    },
+    {
+      uid: 'STU007',
+      title: '⚠️ Attendance Shortage: CS101',
+      message: 'Your attendance in Data Structures (CS101) dropped to 60%. You need 12 consecutive classes to reach 75%.',
+      link: '#/',
+      is_read: 0,
+      ts: now - 3 * 3600 * 1000,
+      type: 'attendance_shortage',
+      course_id: 'CS101'
+    },
+    {
+      uid: 'STU011',
+      title: '⚠️ Attendance Shortage: CS102',
+      message: 'Your attendance in Data Communications (CS102) dropped to 65%. You need 8 consecutive classes to reach 75%.',
+      link: '#/',
+      is_read: 0,
+      ts: now - 5 * 3600 * 1000,
+      type: 'attendance_shortage',
+      course_id: 'CS102'
+    }
+  ];
+
+  demoNotifs.forEach(n => {
+    insertNotif.run(n.uid, n.title, n.message, n.link, n.is_read, n.ts, n.type, n.course_id);
+  });
+
     seedEventsIfEmpty();
     seedImpactIfEmpty();
   });
@@ -526,6 +596,74 @@ function seedDatabase(force = false) {
   runSeedTx();
 
   console.log('✅ ClassPulse Database successfully initialized and seeded!');
+}
+
+function seedNotificationsIfEmpty() {
+  const count = db.prepare('SELECT count(*) as count FROM notifications').get().count;
+  if (count > 0) return;
+
+  const now = Date.now();
+  const insertNotif = db.prepare(`
+    INSERT INTO notifications (uid, title, message, link, is_read, created_ts, type, course_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const demoNotifs = [
+    {
+      uid: 'STU001',
+      title: '⏰ Class Update: Data Structures',
+      message: 'Data Structures: Faculty Absent. You are free.',
+      link: '#/',
+      is_read: 0,
+      ts: now - 15 * 60 * 1000,
+      type: 'class_status',
+      course_id: 'CS101'
+    },
+    {
+      uid: 'STU001',
+      title: '📝 Grade Returned: Assignment 1: Problem Set',
+      message: 'Score: 85/100 pts - Good job.',
+      link: '#course/CS101?tab=classwork',
+      is_read: 0,
+      ts: now - 2 * 3600 * 1000,
+      type: 'grade_returned',
+      course_id: 'CS101'
+    },
+    {
+      uid: 'STU001',
+      title: '📢 Campus Notice',
+      message: 'Auditorium doors open now for Tech Heist Hackathon Finale.',
+      link: '#/',
+      is_read: 1,
+      ts: now - 4 * 3600 * 1000,
+      type: 'notice',
+      course_id: null
+    },
+    {
+      uid: 'STU007',
+      title: '⚠️ Attendance Shortage: CS101',
+      message: 'Your attendance in Data Structures (CS101) dropped to 60%. You need 12 consecutive classes to reach 75%.',
+      link: '#/',
+      is_read: 0,
+      ts: now - 3 * 3600 * 1000,
+      type: 'attendance_shortage',
+      course_id: 'CS101'
+    },
+    {
+      uid: 'STU011',
+      title: '⚠️ Attendance Shortage: CS102',
+      message: 'Your attendance in Data Communications (CS102) dropped to 65%. You need 8 consecutive classes to reach 75%.',
+      link: '#/',
+      is_read: 0,
+      ts: now - 5 * 3600 * 1000,
+      type: 'attendance_shortage',
+      course_id: 'CS102'
+    }
+  ];
+
+  for (const n of demoNotifs) {
+    insertNotif.run(n.uid, n.title, n.message, n.link, n.is_read, n.ts, n.type, n.course_id);
+  }
 }
 
 function seedEventsIfEmpty() {
