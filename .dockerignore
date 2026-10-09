@@ -1,0 +1,8 @@
+node_modules
+data.json
+uploads
+classpulse.db
+classpulse.db-wal
+classpulse.db-shm
+.git
+.DS_Store

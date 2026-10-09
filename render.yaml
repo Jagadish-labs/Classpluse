@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: classpulse
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DEMO
+        value: "1"
+      - key: SECRET
+        generateValue: true

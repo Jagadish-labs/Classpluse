@@ -1,0 +1,34 @@
+{
+  "name": "classpulse",
+  "version": "1.0.0",
+  "description": "ClassPulse - Real-time class status platform for college students",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "demo": "node -e \"process.env.DEMO='1'; require('./server.js')\"",
+    "test": "node test-runner.js"
+  },
+  "keywords": [
+    "class-status",
+    "realtime",
+    "socketio",
+    "hackathon"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^13.0.3",
+    "cookie-parser": "^1.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.4.0",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.4"
+  }
+}

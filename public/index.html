@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>ClassPulse • College Classroom & Campus Events</title>
+  <meta name="description" content="ClassPulse - Real-time class status, campus events, trending activities, and Google Classroom for students.">
+  <meta name="theme-color" content="#4f46e5">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Socket.IO client -->
+  <script src="/socket.io/socket.io.js"></script>
+
+  <!-- HTML5 QR Code Scanner Library -->
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="app" class="app-layout">
+
+    <!-- RECONNECTING LIVE NETWORK BANNER -->
+    <div id="reconnectingBanner" class="reconnecting-banner hidden" role="status" aria-live="polite">
+      <div class="spinner-sm"></div>
+      <span>Reconnecting to ClassPulse live network...</span>
+    </div>
+
+    <!-- URGENT NOTICE BANNER (Global top notification) -->
+    <aside id="globalUrgentBanner" class="urgent-banner hidden" aria-live="assertive">
+      <div class="urgent-content">
+        <span class="urgent-icon">🚨</span>
+        <span class="urgent-tag">URGENT NOTICE</span>
+        <span id="urgentNoticeText" class="urgent-text"></span>
+      </div>
+      <div class="urgent-actions">
+        <button id="clearUrgentNoticeBtn" class="banner-btn hidden" title="Clear urgent banner">Clear Notice</button>
+        <button id="dismissUrgentNoticeBtn" class="banner-dismiss" title="Dismiss from view">×</button>
+      </div>
+    </aside>
+
+    <!-- NAVIGATION BAR -->
+    <header class="navbar">
+      <div class="nav-left">
+        <a href="#/" class="brand-link">
+          <div class="brand-logo">
+            <div class="logo-pulse"></div>
+            <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+            </svg>
+          </div>
+          <div class="brand-text">
+            <span class="brand-name">ClassPulse</span>
+            <span class="live-indicator" id="navLiveIndicator">
+              <span class="live-dot"></span>
+              <span id="navLiveText">LIVE</span>
+            </span>
+          </div>
+        </a>
+
+        <!-- Main Navigation Links -->
+        <nav class="nav-links-menu" id="navLinksMenu">
+          <a href="#/" class="nav-menu-item active" id="navLinkHome">Classes</a>
+          <a href="#classroom" class="nav-menu-item" id="navLinkClassroom">📚 Classroom</a>
+          <a href="#events" class="nav-menu-item" id="navLinkEvents">🎉 Campus Events</a>
+          <a href="#my-events" class="nav-menu-item hidden" id="navLinkMyEvents">🎟️ My Passes</a>
+          <a href="#admin" class="nav-menu-item hidden" id="navLinkAdmin">🛡️ Admin</a>
+          <a href="#impact" class="nav-menu-item hidden" id="navLinkImpact">📈 Impact</a>
+          <a href="/share" target="_blank" class="nav-menu-item" id="navLinkShare">📱 Share QR</a>
+        </nav>
+      </div>
+
+      <div class="nav-right">
+        <!-- Live Clock -->
+        <div class="clock-display" id="navClockDisplay">
+          <span class="clock-time" id="navLiveClock">--:--:--</span>
+          <span class="clock-day" id="navLiveDate">Today</span>
+        </div>
+
+        <!-- In-App Notification Bell -->
+        <div class="notif-wrapper">
+          <button id="notifBellBtn" class="nav-icon-btn" title="Campus notifications" aria-label="Notifications">
+            <span>🔔</span>
+            <span id="notifBadge" class="notif-count-badge hidden">0</span>
+          </button>
+        </div>
+
+        <!-- Theme Toggle -->
+        <button id="themeToggleBtn" class="nav-icon-btn" title="Toggle theme" aria-label="Toggle Theme">
+          <span id="themeIcon">🌓</span>
+        </button>
+
+        <!-- User Menu (when logged in) -->
+        <div id="navUserArea" class="nav-user-area hidden">
+          <div class="user-badge" id="navUserBadge">
+            <span class="user-role-tag" id="navUserRole">ROLE</span>
+            <span class="user-name" id="navUserName">User</span>
+          </div>
+          <button id="navLogoutBtn" class="btn btn-sm btn-outline-danger">Logout</button>
+        </div>
+
+        <!-- Login / Signup Links (when logged out) -->
+        <div id="navAuthLinks" class="nav-auth-links">
+          <a href="#login" class="btn btn-sm btn-primary">Log In</a>
+          <a href="#signup" class="btn btn-sm btn-secondary">Activate ID</a>
+        </div>
+      </div>
+    </header>
+
+    <!-- MAIN VIEW CONTAINER -->
+    <main id="mainContainer" class="main-content">
+      <div class="loading-spinner-view">
+        <div class="spinner"></div>
+        <p>Connecting to ClassPulse live network...</p>
+        <span class="hidden" aria-hidden="true">RIGHT NOW Directives & Classroom</span>
+      </div>
+    </main>
+
+    <!-- FOOTER -->
+    <footer class="app-footer">
+      <div class="footer-container">
+        <p><strong>ClassPulse</strong> — Live Class Directives, Google Classroom & Campus Events</p>
+        <p class="footer-tagline">"One screen that tells a student what to do right now, not just what is happening."</p>
+        <p class="footer-copy">ClassPulse - Tech Heist Buildathon • Real-Time Multi-Role Campus System</p>
+      </div>
+    </footer>
+
+    <!-- MODAL CONTAINER (Dialogs, QR Scanner, Event Detail, Submissions) -->
+    <div id="globalModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+      <div class="modal-card" id="modalCard">
+        <div class="modal-header">
+          <h3 id="modalTitle" class="modal-title">Dialog</h3>
+          <button id="modalCloseBtn" class="modal-close-btn" aria-label="Close">✕</button>
+        </div>
+        <div class="modal-body" id="modalBody">
+          <!-- Injected via JS -->
+        </div>
+      </div>
+    </div>
+
+    <!-- FORCE CHANGE PASSKEY MODAL -->
+    <div id="forcePassModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 class="modal-title">🔑 Change Temporary Passkey</h3>
+        </div>
+        <div class="modal-body">
+          <p class="info-alert">An administrator has reset your passkey. Please set your new private passkey (min 6 characters) to continue.</p>
+          <form id="forcePassForm" class="mt-3">
+            <div class="form-group">
+              <label for="newForcedPasskey">New Passkey *</label>
+              <input type="password" id="newForcedPasskey" class="form-input" required minlength="6" placeholder="Enter new passkey...">
+            </div>
+            <div class="form-group mt-2">
+              <label for="confirmForcedPasskey">Confirm New Passkey *</label>
+              <input type="password" id="confirmForcedPasskey" class="form-input" required minlength="6" placeholder="Confirm new passkey...">
+            </div>
+            <p id="forcePassError" class="text-danger mt-2 hidden"></p>
+            <button type="submit" class="btn btn-primary btn-block mt-3">Set New Passkey</button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- TOAST CONTAINER -->
+    <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+  </div>
+
+  <!-- Main JavaScript Application Logic -->
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+---
+description: ClassPulse project rules
+alwaysApply: true
+---
+- This is an existing, working app. Read the current code before changing anything and follow its existing structure, naming and style.
+- Never rewrite or restructure the app. Make the smallest change that fixes the problem.
+- Never remove or rename existing features, routes, or demo logins (ADMIN001, FAC001-003, STU001-012).
+- Every route must check authentication, role and ownership on the server. Never trust the client.
+- Escape all user text when rendering. Use parameterized queries only. Never put secrets in code.
+- After any change, run the app and the test script, and report what passed and what failed.
+- Do not add new dependencies unless needed, and say why.
