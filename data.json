@@ -11,9 +11,9 @@
       "fac": "Prof. Rao",
       "faculty_id": "FAC001",
       "room": "B-204",
-      "st": "ongoing",
-      "note": "",
-      "ts": 1791570511439
+      "st": "delayed",
+      "note": "Traffic on highway",
+      "ts": 1791570945898
     },
     {
       "id": 2,
@@ -82,6 +82,10 @@
     }
   ],
   "log": [
+    {
+      "t": "Data Structures: Faculty Delayed (Traffic on highway)",
+      "ts": 1791570945936
+    },
     {
       "t": "Timetable initialized for today",
       "ts": 1791570511439
