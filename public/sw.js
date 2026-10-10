@@ -1,4 +1,4 @@
-const CACHE_NAME = 'classpulse-shell-v1';
+const CACHE_NAME = 'classpulse-shell-v2';
 
 const APP_SHELL = [
   '/',

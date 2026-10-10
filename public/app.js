@@ -771,7 +771,14 @@
     `;
 
     try {
-      const coursesData = await fetchApi('/api/courses');
+      const [coursesData, atRiskRes] = await Promise.all([
+        fetchApi('/api/courses'),
+        fetchApi('/api/faculty/at-risk').catch(err => {
+          console.warn('Could not load at-risk students:', err);
+          return [];
+        })
+      ]);
+      const atRiskStudents = Array.isArray(atRiskRes) ? atRiskRes : (atRiskRes.students || atRiskRes.atRisk || []);
       const myClasses = liveTimetableState.classes.filter(c => c.faculty_id === currentUser.uid);
 
       container.innerHTML = `
@@ -810,6 +817,92 @@
               </div>
 
               <button class="btn btn-primary btn-block mt-3" onclick="window.ClassPulse.applyFacStatus()">🚀 Broadcast Status to All Students</button>
+            `}
+          </div>
+        </section>
+
+        <!-- AT-RISK STUDENTS CARD -->
+        <section class="section-block" id="atRiskStudentsSection">
+          <div class="section-head">
+            <h3 class="section-title">⚠️ At-Risk Students</h3>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">${atRiskStudents.length} student${atRiskStudents.length === 1 ? '' : 's'} flagged (&lt;75% att or &lt;40% marks)</span>
+          </div>
+
+          <div class="hero-card" style="padding: 18px;">
+            ${atRiskStudents.length === 0 ? `
+              <div class="empty-state-card" style="padding: 24px; text-align: center; color: var(--text-muted); margin: 0;">
+                <div style="font-size: 2rem; margin-bottom: 6px;">🎉</div>
+                <strong style="color: var(--text-main); font-size: 0.95rem;">No students currently at risk</strong>
+                <p style="font-size: 0.8rem; margin-top: 4px;">All enrolled students across your courses maintain attendance &ge; 75% and average marks &ge; 40%.</p>
+              </div>
+            ` : `
+              <div style="overflow-x: auto;">
+                <table class="data-table" style="width: 100%;">
+                  <thead>
+                    <tr>
+                      <th>Student</th>
+                      <th>Course</th>
+                      <th>Attendance</th>
+                      <th>Avg Marks</th>
+                      <th>Risk Level</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${atRiskStudents.map(s => {
+                      const isRed = s.riskLevel === 'red' || s.risk_level === 'red';
+                      const isReminded = Boolean(s.reminded || s.remindedToday);
+                      const stuUid = s.id || s.studentId || s.uid;
+                      const cId = s.courseId || s.course_id;
+                      return `
+                        <tr>
+                          <td>
+                            <strong>${escapeHtml(s.name)}</strong>
+                            <div style="font-size: 0.75rem; color: var(--text-muted); font-family: var(--font-mono);">${escapeHtml(stuUid)}</div>
+                          </td>
+                          <td>
+                            <strong>${escapeHtml(s.course || s.courseName)}</strong>
+                            ${s.courseCode ? `<div style="font-size: 0.75rem; color: var(--text-muted);">${escapeHtml(s.courseCode)}</div>` : ''}
+                          </td>
+                          <td>
+                            <span style="font-weight: 700; color: ${s.attendance < 75 ? 'var(--st-absent)' : 'var(--st-ongoing)'};">
+                              ${s.attendance}%
+                            </span>
+                            ${s.attendance < 75 ? '<span style="font-size: 0.72rem; color: var(--st-absent); display: block;">&lt; 75%</span>' : ''}
+                          </td>
+                          <td>
+                            <span style="font-weight: 700; color: ${s.averageMarks < 40 ? 'var(--st-absent)' : 'var(--st-ongoing)'};">
+                              ${s.averageMarks}%
+                            </span>
+                            ${s.averageMarks < 40 ? '<span style="font-size: 0.72rem; color: var(--st-absent); display: block;">&lt; 40%</span>' : ''}
+                          </td>
+                          <td>
+                            ${isRed ? `
+                              <span class="badge badge-absent" style="display: inline-flex; align-items: center; gap: 4px; font-weight: 700; text-transform: uppercase;">
+                                🔴 Red
+                              </span>
+                            ` : `
+                              <span class="badge badge-delayed" style="display: inline-flex; align-items: center; gap: 4px; font-weight: 700; text-transform: uppercase;">
+                                🟡 Amber
+                              </span>
+                            `}
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              class="btn btn-sm ${isReminded ? 'btn-secondary' : 'btn-primary'} at-risk-remind-btn"
+                              data-student-id="${escapeHtml(stuUid)}"
+                              data-course-id="${escapeHtml(cId)}"
+                              onclick="window.ClassPulse.sendAtRiskReminder('${escapeHtml(stuUid)}', '${escapeHtml(cId)}', this)"
+                              ${isReminded ? 'disabled' : ''}
+                            >${isReminded ? 'Reminded' : 'Send reminder'}</button>
+                          </td>
+                        </tr>
+                      `;
+                    }).join('')}
+                  </tbody>
+                </table>
+              </div>
             `}
           </div>
         </section>
@@ -2700,6 +2793,42 @@
 
     refreshImpact() {
       renderImpactDashboard();
+    },
+
+    async sendAtRiskReminder(studentId, courseId, btn) {
+      if (!studentId || !courseId) return;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Sending...';
+      }
+      try {
+        const res = await fetchApi('/api/faculty/at-risk/remind', {
+          method: 'POST',
+          body: JSON.stringify({ studentId, courseId })
+        });
+        if (btn) {
+          btn.textContent = 'Reminded';
+          btn.disabled = true;
+          btn.classList.remove('btn-primary');
+          btn.classList.add('btn-secondary');
+        }
+        showToast({ title: 'Reminder Sent', message: (res && res.message) || 'Academic alert sent to student.', type: 'success' });
+        AudioEngine.chime('status');
+      } catch (err) {
+        if (btn) {
+          if (err.message && err.message.toLowerCase().includes('already')) {
+            btn.textContent = 'Reminded';
+            btn.disabled = true;
+            btn.classList.remove('btn-primary');
+            btn.classList.add('btn-secondary');
+            showToast({ title: 'Notice', message: err.message, type: 'info' });
+          } else {
+            btn.disabled = false;
+            btn.textContent = 'Send reminder';
+            showToast({ title: 'Error', message: err.message, type: 'urgent' });
+          }
+        }
+      }
     },
 
     setLoginRole(role) {

@@ -252,6 +252,17 @@ function initSchema() {
       minutes_saved INTEGER DEFAULT 0,
       created_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS faculty_reminders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      faculty_id TEXT NOT NULL,
+      student_id TEXT NOT NULL,
+      course_id TEXT NOT NULL,
+      sent_at INTEGER NOT NULL,
+      FOREIGN KEY (faculty_id) REFERENCES users(uid) ON DELETE CASCADE,
+      FOREIGN KEY (student_id) REFERENCES users(uid) ON DELETE CASCADE,
+      FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+    );
   `);
 
   try { db.exec('ALTER TABLE roster ADD COLUMN is_organizer INTEGER DEFAULT 0'); } catch(e) {}
@@ -260,6 +271,8 @@ function initSchema() {
   try { db.exec('ALTER TABLE notifications ADD COLUMN course_id TEXT'); } catch(e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_notifications_uid_isread ON notifications(uid, is_read)'); } catch(e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_notifications_uid_type ON notifications(uid, type, course_id)'); } catch(e) {}
+  try { db.exec('CREATE TABLE IF NOT EXISTS faculty_reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, faculty_id TEXT NOT NULL, student_id TEXT NOT NULL, course_id TEXT NOT NULL, sent_at INTEGER NOT NULL)'); } catch(e) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_faculty_reminders_lookup ON faculty_reminders (student_id, course_id, sent_at)'); } catch(e) {}
 }
 
 function seedDatabase(force = false) {
@@ -280,6 +293,7 @@ function seedDatabase(force = false) {
     // Clear existing if force
     if (force) {
       db.exec(`
+      DELETE FROM faculty_reminders;
       DELETE FROM impact_updates;
       DELETE FROM notifications;
       DELETE FROM event_views;
@@ -437,8 +451,8 @@ function seedDatabase(force = false) {
 
       students.forEach((stu, sIdx) => {
         let status = 'Present';
-        if (stu.uid === 'STU007' && (i % 3 === 0 || i % 5 === 0)) status = 'Absent';
-        else if (stu.uid === 'STU011' && (i % 4 === 0 || i % 7 === 0)) status = 'Absent';
+        if (stu.uid === 'STU007' && c.id === 'CS101' && (i % 3 === 0 || i % 5 === 0)) status = 'Absent';
+        else if (stu.uid === 'STU011' && (c.id === 'CS104' || c.id === 'CS102') && (i % 4 === 0 || i % 7 === 0)) status = 'Absent';
         else if ((sIdx + i) % 11 === 0) status = 'Absent';
         else if ((sIdx + i) % 17 === 0) status = 'Late';
         insertRecord.run(sessId, stu.uid, status);
@@ -462,8 +476,15 @@ function seedDatabase(force = false) {
     const ass2 = insertAssessment.run(c.id, 'Mid-Semester Examination', 50, 40, 1, now - 5 * 86400000);
 
     students.forEach((stu, idx) => {
-      const score1 = Math.min(20, Math.max(8, 14 + ((idx * 3) % 7) - 2));
-      const score2 = Math.min(50, Math.max(18, 38 + ((idx * 5) % 13) - 6));
+      let score1 = Math.min(20, Math.max(8, 14 + ((idx * 3) % 7) - 2));
+      let score2 = Math.min(50, Math.max(18, 38 + ((idx * 5) % 13) - 6));
+      if (stu.uid === 'STU007' && c.id === 'CS101') {
+        score1 = 6;
+        score2 = 18;
+      } else if (stu.uid === 'STU003' && c.id === 'CS101') {
+        score1 = 7;
+        score2 = 19;
+      }
       insertMark.run(ass1.lastInsertRowid, stu.uid, score1);
       insertMark.run(ass2.lastInsertRowid, stu.uid, score2);
     });

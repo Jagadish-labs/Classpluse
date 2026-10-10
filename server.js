@@ -1041,6 +1041,173 @@ app.get('/api/marks/course/:courseId/export', authenticate, requireRole('FACULTY
 });
 
 // ============================================================================
+// FACULTY AT-RISK STUDENTS & REMINDERS
+// ============================================================================
+
+// GET /api/faculty/at-risk (Faculty Role Only - 403 for others)
+app.get('/api/faculty/at-risk', authenticate, requireRole('FACULTY'), (req, res) => {
+  try {
+    const facultyCourses = db.prepare('SELECT id, code, name FROM courses WHERE faculty_id = ?').all(req.user.uid);
+    const atRiskStudents = [];
+    const now = Date.now();
+    const startOfDay = new Date().setHours(0, 0, 0, 0);
+    const oneDayAgo = now - 24 * 60 * 60 * 1000;
+    const cutoff = Math.min(startOfDay, oneDayAgo);
+
+    for (const c of facultyCourses) {
+      const students = db.prepare(`
+        SELECT u.uid, u.name
+        FROM users u
+        JOIN enrollments e ON u.uid = e.student_id
+        WHERE e.course_id = ?
+        ORDER BY u.uid ASC
+      `).all(c.id);
+
+      const assessments = db.prepare('SELECT id, max_marks FROM assessments WHERE course_id = ?').all(c.id);
+
+      for (const stu of students) {
+        // 1. Attendance percentage
+        const records = db.prepare(`
+          SELECT r.status
+          FROM attendance_records r
+          JOIN attendance_sessions s ON r.session_id = s.id
+          WHERE s.course_id = ? AND r.student_id = ?
+        `).all(c.id, stu.uid);
+
+        const totalSessions = records.length;
+        const presentCount = records.filter(r => r.status === 'Present' || r.status === 'Late').length;
+        const attendancePct = totalSessions > 0 ? Math.round((presentCount / totalSessions) * 100) : 100;
+
+        // 2. Average marks percentage
+        let stuTotalScore = 0;
+        let totalMaxMarks = 0;
+        for (const a of assessments) {
+          const m = db.prepare('SELECT score FROM marks WHERE assessment_id = ? AND student_id = ?').get(a.id, stu.uid);
+          if (m && m.score !== null) {
+            stuTotalScore += m.score;
+            totalMaxMarks += a.max_marks;
+          }
+        }
+        const marksAvg = totalMaxMarks > 0 ? Math.round((stuTotalScore / totalMaxMarks) * 100) : 100;
+
+        // At-risk criteria: attendance < 75% OR average marks < 40%
+        const isLowAttendance = attendancePct < 75;
+        const isLowMarks = totalMaxMarks > 0 ? (marksAvg < 40) : false;
+
+        if (isLowAttendance || isLowMarks) {
+          const riskLevel = (isLowAttendance && isLowMarks) ? 'red' : 'amber';
+
+          // Check if reminded today
+          const existingReminder = db.prepare(`
+            SELECT id FROM faculty_reminders
+            WHERE student_id = ? AND course_id = ? AND (sent_at >= ? OR date(sent_at / 1000, 'unixepoch', 'localtime') = date('now', 'localtime'))
+          `).get(stu.uid, c.id, cutoff);
+
+          atRiskStudents.push({
+            name: stu.name,
+            id: stu.uid,
+            ID: stu.uid,
+            studentId: stu.uid,
+            course: c.name,
+            courseName: c.name,
+            courseCode: c.code,
+            courseId: c.id,
+            attendance: attendancePct,
+            attendancePct: attendancePct,
+            attendancePercentage: attendancePct,
+            averageMarks: marksAvg,
+            marks: marksAvg,
+            avgMarks: marksAvg,
+            riskLevel: riskLevel,
+            risk_level: riskLevel,
+            reminded: Boolean(existingReminder),
+            remindedToday: Boolean(existingReminder)
+          });
+        }
+      }
+    }
+
+    res.json(atRiskStudents);
+  } catch (err) {
+    console.error('Error fetching at-risk students:', err);
+    res.status(500).json({ error: 'Failed to fetch at-risk students: ' + err.message });
+  }
+});
+
+// POST /api/faculty/at-risk/remind (Faculty Role Only)
+app.post('/api/faculty/at-risk/remind', authenticate, requireRole('FACULTY'), (req, res) => {
+  try {
+    const { studentId, courseId } = req.body || {};
+    if (!studentId || !courseId) {
+      return res.status(400).json({ error: 'Missing required parameters: studentId and courseId are required.' });
+    }
+
+    // Verify course is taught by logged-in faculty
+    const course = db.prepare('SELECT * FROM courses WHERE (id = ? OR code = ?) AND faculty_id = ?').get(courseId, courseId, req.user.uid);
+    if (!course) {
+      return res.status(403).json({ error: 'Forbidden: You can only send reminders for courses you teach.' });
+    }
+
+    // Verify student exists
+    const student = db.prepare("SELECT * FROM users WHERE uid = ? AND role = 'STUDENT'").get(studentId);
+    if (!student) {
+      return res.status(404).json({ error: 'Student not found.' });
+    }
+
+    // Limit to one reminder per student per course per day
+    const now = Date.now();
+    const startOfDay = new Date().setHours(0, 0, 0, 0);
+    const oneDayAgo = now - 24 * 60 * 60 * 1000;
+    const cutoff = Math.min(startOfDay, oneDayAgo);
+
+    const existingReminder = db.prepare(`
+      SELECT id FROM faculty_reminders
+      WHERE student_id = ? AND course_id = ? AND (sent_at >= ? OR date(sent_at / 1000, 'unixepoch', 'localtime') = date('now', 'localtime'))
+    `).get(student.uid, course.id, cutoff);
+
+    if (existingReminder) {
+      return res.status(400).json({ error: 'A reminder has already been sent to this student for this course today.' });
+    }
+
+    // Record reminder in database
+    db.prepare(`
+      INSERT INTO faculty_reminders (faculty_id, student_id, course_id, sent_at)
+      VALUES (?, ?, ?, ?)
+    `).run(req.user.uid, student.uid, course.id, now);
+
+    // Create notification for that student using existing notifications code and emit over Socket.IO
+    const title = `⚠️ Academic Alert: ${course.code}`;
+    const message = `Prof. ${req.user.name} sent an academic performance alert for ${course.name} (${course.code}). Please review your attendance and grades.`;
+    const link = `#course/${course.id}`;
+
+    const resInsert = db.prepare(`
+      INSERT INTO notifications (uid, title, message, link, is_read, created_ts, type, course_id)
+      VALUES (?, ?, ?, ?, 0, ?, 'attendance_shortage', ?)
+    `).run(student.uid, title, message, link, now, course.id);
+
+    const notifObj = {
+      id: resInsert.lastInsertRowid,
+      uid: student.uid,
+      title,
+      message,
+      link,
+      is_read: 0,
+      created_ts: now,
+      type: 'attendance_shortage',
+      course_id: course.id
+    };
+
+    io.to(`user:${student.uid}`).emit('notification:new', notifObj);
+    io.to(`user:${student.uid}`).emit('notifications:unread_update', {});
+
+    res.json({ success: true, message: `Reminder sent to ${student.name}.`, notification: notifObj });
+  } catch (err) {
+    console.error('Error sending at-risk reminder:', err);
+    res.status(500).json({ error: 'Failed to send reminder: ' + err.message });
+  }
+});
+
+// ============================================================================
 // GOOGLE CLASSROOM FEATURES (Phase 4)
 // ============================================================================
 

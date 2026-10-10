@@ -1,2 +1,5 @@
 classpulse.db-shm
 classpulse.db-wal
+node_modules/
+uploads/
+backups/
