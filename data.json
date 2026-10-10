@@ -11,9 +11,9 @@
       "fac": "Prof. Rao",
       "faculty_id": "FAC001",
       "room": "B-204",
-      "st": "cancelled",
+      "st": "ongoing",
       "note": "",
-      "ts": 1791614291838
+      "ts": 1791629437490
     },
     {
       "id": 2,
@@ -26,7 +26,7 @@
       "room": "B-206",
       "st": "ongoing",
       "note": "",
-      "ts": 1791614199000
+      "ts": 1791629437490
     },
     {
       "id": 3,
@@ -39,7 +39,7 @@
       "room": "Design Lab",
       "st": "ongoing",
       "note": "",
-      "ts": 1791614199000
+      "ts": 1791629437490
     },
     {
       "id": 4,
@@ -52,7 +52,7 @@
       "room": "C-101",
       "st": "ongoing",
       "note": "",
-      "ts": 1791614199000
+      "ts": 1791629437490
     },
     {
       "id": 5,
@@ -65,7 +65,7 @@
       "room": "B-210",
       "st": "ongoing",
       "note": "",
-      "ts": 1791614199000
+      "ts": 1791629437490
     },
     {
       "id": 6,
@@ -78,17 +78,13 @@
       "room": "Lab 2",
       "st": "ongoing",
       "note": "",
-      "ts": 1791614199000
+      "ts": 1791629437490
     }
   ],
   "log": [
     {
-      "t": "Data Structures: Class Cancelled",
-      "ts": 1791614291838
-    },
-    {
       "t": "Timetable initialized for today",
-      "ts": 1791614199000
+      "ts": 1791629437490
     }
   ]
 }

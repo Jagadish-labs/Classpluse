@@ -356,7 +356,6 @@ function notifyEnrolledStudentsClassStatus(item, st, note) {
     io.to(`user:${stuId}`).emit('notification:new', notifObj);
     io.to(`user:${stuId}`).emit('notifications:unread_update', {});
   }
-  io.to('role:STUDENT').emit('notifications:unread_update', {});
 }
 
 function notifyStudentSubmissionGraded(sub, pts, cleanFeedback) {
