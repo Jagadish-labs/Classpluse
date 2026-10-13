@@ -188,8 +188,8 @@ function getFullTimetableState() {
     const ds = statusMap.get(cls.id);
     return {
       ...cls,
-      st: ds ? ds.st : cls.st,
-      note: ds ? ds.note : cls.note,
+      st: ds ? ds.st : 'ongoing',
+      note: ds ? ds.note : '',
       ts: ds ? ds.ts : cls.ts
     };
   });
@@ -615,8 +615,8 @@ app.get('/api/timetable/weekly', authenticate, (req, res) => {
     return {
       ...slot,
       date_str: slotDate,
-      st: ds ? ds.st : slot.st,
-      note: ds ? ds.note : slot.note,
+      st: ds ? ds.st : 'ongoing',
+      note: ds ? ds.note : '',
       ts: ds ? ds.ts : slot.ts
     };
   });
@@ -627,6 +627,7 @@ app.get('/api/timetable/weekly', authenticate, (req, res) => {
     effectiveNow: effectiveNow.toISOString(),
     effectiveDay: jsDay,
     simulatedTime: simRow ? simRow.value : null,
+    isDemo: process.env.DEMO === '1' || process.env.DEMO === 'true',
     weekDates,
     classes: weeklyClasses,
     userRole: req.user.role,
@@ -636,13 +637,15 @@ app.get('/api/timetable/weekly', authenticate, (req, res) => {
 
 // POST /api/timetable/simulated-time (Admin only, Demo clock)
 app.post('/api/timetable/simulated-time', authenticate, requireRole('ADMIN'), (req, res) => {
-  const { simulatedTime, day, time } = req.body;
+  const { simulatedTime, day, time, clear } = req.body;
   let timeVal = '';
 
-  if (simulatedTime !== undefined && simulatedTime !== null && String(simulatedTime).trim() !== '') {
+  if (clear) {
+    timeVal = '';
+  } else if (simulatedTime !== undefined && simulatedTime !== null && String(simulatedTime).trim() !== '') {
     timeVal = String(simulatedTime).trim();
   } else if (day && time) {
-    const now = getEffectiveNow();
+    const now = new Date();
     const { weekDates } = getWeekDates(now);
     const targetDateStr = weekDates[day] || formatDateStr(now);
     timeVal = `${targetDateStr}T${time}:00`;

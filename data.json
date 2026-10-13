@@ -2,7 +2,7 @@
   "notice": "",
   "demo": 2,
   "simulatedTime": null,
-  "effectiveNow": "2026-10-13T05:04:46.443Z",
+  "effectiveNow": "2026-10-13T11:17:53.336Z",
   "effectiveDay": 2,
   "classes": [
     {
@@ -16,7 +16,7 @@
       "room": "C-101",
       "st": "ongoing",
       "note": "",
-      "ts": 1791867885826,
+      "ts": 1791890273102,
       "day": 2
     },
     {
@@ -30,7 +30,7 @@
       "room": "B-204",
       "st": "ongoing",
       "note": "",
-      "ts": 1791867885826,
+      "ts": 1791890273102,
       "day": 2
     },
     {
@@ -44,7 +44,7 @@
       "room": "B-206",
       "st": "ongoing",
       "note": "",
-      "ts": 1791867885826,
+      "ts": 1791890273102,
       "day": 2
     },
     {
@@ -58,7 +58,7 @@
       "room": "B-210",
       "st": "ongoing",
       "note": "",
-      "ts": 1791867885826,
+      "ts": 1791890273102,
       "day": 2
     },
     {
@@ -72,7 +72,7 @@
       "room": "Design Lab",
       "st": "ongoing",
       "note": "",
-      "ts": 1791867885826,
+      "ts": 1791890273102,
       "day": 2
     },
     {
@@ -86,14 +86,14 @@
       "room": "Net Lab",
       "st": "ongoing",
       "note": "",
-      "ts": 1791867885826,
+      "ts": 1791890273102,
       "day": 2
     }
   ],
   "log": [
     {
       "t": "Timetable initialized for today",
-      "ts": 1791867885826
+      "ts": 1791890273102
     }
   ]
 }

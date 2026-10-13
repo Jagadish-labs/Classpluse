@@ -134,8 +134,20 @@
     return (parts[0] || 0) * 60 + (parts[1] || 0);
   }
 
+  function getEffectiveDate() {
+    if (liveTimetableState && liveTimetableState.simulatedTime) {
+      const d = new Date(liveTimetableState.simulatedTime);
+      if (!isNaN(d.getTime())) return d;
+    }
+    if (liveTimetableState && liveTimetableState.effectiveNow) {
+      const d = new Date(liveTimetableState.effectiveNow);
+      if (!isNaN(d.getTime())) return d;
+    }
+    return new Date();
+  }
+
   function getCurrentMinutes() {
-    const now = new Date();
+    const now = getEffectiveDate();
     return now.getHours() * 60 + now.getMinutes();
   }
 
@@ -340,8 +352,8 @@
     });
     if (live) return { cls: live, mode: 'live', isRealTime: true };
 
-    // 2. Demo simulator override
-    if (state.demo !== null && state.demo !== undefined && state.demo !== '') {
+    // 2. Demo simulator override (only when simulatedTime is NOT active)
+    if (!state.simulatedTime && state.demo !== null && state.demo !== undefined && state.demo !== '') {
       const demoCls = classes.find(c => c.id === Number(state.demo));
       if (demoCls) return { cls: demoCls, mode: 'demo', isRealTime: false };
     }
@@ -2367,50 +2379,36 @@
     const startTime = new Date(`${sDate}T${slot.s}:00`);
     const endTime = new Date(`${sDate}T${slot.e}:00`);
 
-    if (slot.st === 'cancelled') {
+    const isCancelled = slot.st === 'cancelled';
+    const isAbsent = slot.st === 'absent';
+    const isDelayed = slot.st === 'delayed';
+    const isSub = slot.st === 'sub';
+
+    // 1. Cancelled classes show gray mark, NEVER green
+    if (isCancelled) {
       return {
         type: 'cancelled',
         label: 'Cancelled',
         cssClass: 'status-cancelled',
         badgeCss: 'tt-badge-cancelled',
         isGreen: false,
-        icon: '❌'
+        icon: '✕'
       };
     }
 
-    if (slot.st === 'absent') {
+    // 2. Faculty absent classes show red mark, NEVER green
+    if (isAbsent) {
       return {
         type: 'absent',
         label: slot.note ? `Absent (${slot.note})` : 'Faculty Absent',
         cssClass: 'status-absent',
-        badgeCss: 'tt-badge-cancelled',
+        badgeCss: 'tt-badge-absent',
         isGreen: false,
         icon: '🚫'
       };
     }
 
-    if (slot.st === 'delayed') {
-      return {
-        type: 'delayed',
-        label: slot.note ? `Delayed (${slot.note})` : 'Faculty Delayed',
-        cssClass: 'status-delayed',
-        badgeCss: 'badge-delayed',
-        isGreen: false,
-        icon: '⏳'
-      };
-    }
-
-    if (slot.st === 'sub') {
-      return {
-        type: 'sub',
-        label: slot.note ? `Sub: ${slot.note}` : 'Substitute Assigned',
-        cssClass: 'status-sub',
-        badgeCss: 'badge-sub',
-        isGreen: false,
-        icon: '🔄'
-      };
-    }
-
+    // 3. Class whose day and end time have passed -> Completed mark (green check + soft green background)
     if (now >= endTime) {
       return {
         type: 'completed',
@@ -2422,14 +2420,47 @@
       };
     }
 
+    // 4. Class happening now -> Pulsing "Live" outline
     if (now >= startTime && now < endTime) {
+      let liveBadge = '● Live now';
+      let liveBadgeCss = 'tt-badge-live';
+      if (isDelayed) {
+        liveBadge = slot.note ? `Delayed (${slot.note})` : 'Delayed (+10m)';
+        liveBadgeCss = 'badge-delayed';
+      } else if (isSub) {
+        liveBadge = slot.note ? `Sub: ${slot.note}` : 'Substitute';
+        liveBadgeCss = 'badge-sub';
+      }
       return {
         type: 'live',
-        label: '● Live Now',
+        label: liveBadge,
         cssClass: 'status-live',
-        badgeCss: 'tt-badge-live',
+        badgeCss: liveBadgeCss,
         isGreen: false,
         icon: '⚡'
+      };
+    }
+
+    // 5. Future / upcoming classes look normal
+    if (isDelayed) {
+      return {
+        type: 'delayed',
+        label: slot.note ? `Delayed (${slot.note})` : 'Delayed (+10m)',
+        cssClass: 'status-delayed',
+        badgeCss: 'badge-delayed',
+        isGreen: false,
+        icon: '⏳'
+      };
+    }
+
+    if (isSub) {
+      return {
+        type: 'sub',
+        label: slot.note ? `Sub: ${slot.note}` : 'Substitute',
+        cssClass: 'status-sub',
+        badgeCss: 'badge-sub',
+        isGreen: false,
+        icon: '🔄'
       };
     }
 
@@ -2458,7 +2489,7 @@
       timetableAutoRefreshTimer = setInterval(() => {
         const currentHash = (window.location.hash || '').slice(1);
         if (currentHash === 'timetable' && cachedWeeklyData) {
-          renderWeeklyCalendarContent(cachedWeeklyData);
+          fetchApi('/api/timetable/weekly').then(renderWeeklyCalendarContent).catch(() => {});
         } else {
           clearInterval(timetableAutoRefreshTimer);
           timetableAutoRefreshTimer = null;
@@ -2496,23 +2527,24 @@
     ];
 
     const isAdmin = currentUser && currentUser.role === 'ADMIN';
-    const isDemoMode = window.ClassPulseConfig && window.ClassPulseConfig.demo;
+    const isDemoMode = Boolean((window.APP_CONFIG && window.APP_CONFIG.demo) || data.isDemo);
     let demoClockHtml = '';
 
-    if (isAdmin && (isDemoMode || data.simulatedTime)) {
+    if (isAdmin && isDemoMode) {
       demoClockHtml = `
-        <div class="card mb-3" style="border: 1px solid var(--primary); background: var(--bg-input); padding: 12px 16px;">
-          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+        <div class="card mb-3 demo-clock-card" style="border: 1px solid var(--primary); background: var(--bg-card); padding: 14px 18px; border-radius: var(--radius-md);">
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
             <div>
-              <div style="font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
+              <div style="font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 8px;">
                 <span>⏱️ Admin Demo Clock</span>
                 ${data.simulatedTime ? '<span class="tt-slot-badge tt-badge-live">Active</span>' : '<span style="font-size: 0.72rem; color: var(--text-muted); font-weight: 500;">(Real Time)</span>'}
               </div>
-              <div style="font-size: 0.78rem; color: var(--text-muted);">
+              <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 2px;">
                 Effective Clock: <strong style="color: var(--primary);">${now.toLocaleString()}</strong>
               </div>
             </div>
             <form style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;" onsubmit="window.ClassPulse.setSimulatedTime(event)">
+              <label for="simDaySelect" style="font-size: 0.8rem; font-weight: 600; margin: 0;">Day:</label>
               <select id="simDaySelect" class="form-select" style="width: auto; padding: 6px 10px; font-size: 0.8rem;">
                 <option value="1" ${todayDayNum === 1 ? 'selected' : ''}>Monday</option>
                 <option value="2" ${todayDayNum === 2 ? 'selected' : ''}>Tuesday</option>
@@ -2521,9 +2553,10 @@
                 <option value="5" ${todayDayNum === 5 ? 'selected' : ''}>Friday</option>
                 <option value="6" ${todayDayNum === 6 ? 'selected' : ''}>Saturday</option>
               </select>
+              <label for="simTimeInput" style="font-size: 0.8rem; font-weight: 600; margin: 0;">Time:</label>
               <input type="time" id="simTimeInput" class="form-input" style="width: 105px; padding: 6px 8px; font-size: 0.8rem;" value="${now.toTimeString().slice(0, 5)}" required>
               <button type="submit" class="btn btn-sm btn-primary">Set Time</button>
-              ${data.simulatedTime ? '<button type="button" class="btn btn-sm btn-outline-danger" onclick="window.ClassPulse.clearSimulatedTime()">Reset Clock</button>' : ''}
+              ${data.simulatedTime ? '<button type="button" class="btn btn-sm btn-secondary" onclick="window.ClassPulse.clearSimulatedTime()">Reset Clock</button>' : ''}
             </form>
           </div>
         </div>
@@ -2552,19 +2585,20 @@
 
       let rowTds = `<td class="tt-time-cell">${p.label}</td>`;
       for (let d = 1; d <= 6; d++) {
+        const isToday = (todayDayNum === d && jsDay !== 0);
         const slot = data.classes.find(c => c.day === d && c.s === p.s && c.e === p.e);
         if (!slot) {
-          rowTds += `<td class="tt-cell"><div style="color: var(--text-faint); text-align: center; font-size: 0.72rem; padding: 18px 0;">— Free —</div></td>`;
+          rowTds += `<td class="tt-cell ${isToday ? 'col-today' : ''}"><div style="color: var(--text-faint); text-align: center; font-size: 0.72rem; padding: 18px 0;">— Free —</div></td>`;
         } else {
           const evalRes = evaluateSlotStatus(slot, data.weekDates[d], now);
           rowTds += `
-            <td class="tt-cell">
+            <td class="tt-cell ${isToday ? 'col-today' : ''}">
               <div class="tt-slot-card ${evalRes.cssClass}">
                 <div>
-                  <div class="tt-slot-sub">${slot.sub}</div>
+                  <div class="tt-slot-sub">${escapeHtml(slot.sub)}</div>
                   <div class="tt-slot-meta">
-                    <span>👨‍🏫 ${slot.fac}</span>
-                    <span>📍 ${slot.room}</span>
+                    <span>👨‍🏫 ${escapeHtml(slot.fac)}</span>
+                    <span>📍 ${escapeHtml(slot.room)}</span>
                   </div>
                 </div>
                 ${evalRes.label ? `<div><span class="tt-slot-badge ${evalRes.badgeCss}">${evalRes.label}</span></div>` : ''}
@@ -2596,12 +2630,12 @@
         return `
           <div class="card mb-2 ${evalRes.cssClass}" style="padding: 12px 14px;">
             <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px;">
-              <strong style="font-size: 0.92rem;">${slot.sub}</strong>
+              <strong style="font-size: 0.92rem;">${escapeHtml(slot.sub)}</strong>
               <span style="font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: var(--text-muted);">${slot.s} - ${slot.e}</span>
             </div>
             <div style="display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 6px;">
-              <span>👨‍🏫 ${slot.fac}</span>
-              <span>📍 Room ${slot.room}</span>
+              <span>👨‍🏫 ${escapeHtml(slot.fac)}</span>
+              <span>📍 Room ${escapeHtml(slot.room)}</span>
             </div>
             ${evalRes.label ? `<div><span class="tt-slot-badge ${evalRes.badgeCss}">${evalRes.label}</span></div>` : ''}
           </div>
@@ -2613,7 +2647,7 @@
       <div class="view-header" style="margin-bottom: 16px;">
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
           <div>
-            <h1 class="view-title">📅 Weekly Academic Timetable</h1>
+            <h1 class="view-title">📅 Timetable</h1>
             <p class="view-subtitle">${currentUser.role === 'FACULTY' ? 'Your Assigned Teaching Schedule' : 'CSE-A Class Schedule (Mon to Sat)'}</p>
           </div>
           <button class="btn btn-sm btn-secondary" onclick="window.ClassPulse.refreshTimetable()">🔄 Refresh</button>
@@ -2622,12 +2656,24 @@
 
       ${demoClockHtml}
 
-      <!-- Small Legend -->
+      <!-- Legend -->
       <div class="tt-legend-bar">
-        <span class="tt-legend-item"><span class="tt-badge-completed">✓ Completed</span> Finished</span>
-        <span class="tt-legend-item"><span class="tt-badge-live">● Live Now</span> In Session</span>
-        <span class="tt-legend-item"><span class="tt-badge-upcoming">Upcoming</span> Future</span>
-        <span class="tt-legend-item"><span class="tt-badge-cancelled">Cancelled / Absent</span> Cancelled / Absent</span>
+        <div class="tt-legend-item">
+          <span class="tt-slot-badge tt-badge-completed">✓ Completed</span>
+          <span class="tt-legend-text">Completed</span>
+        </div>
+        <div class="tt-legend-item">
+          <span class="tt-slot-badge tt-badge-live">● Live now</span>
+          <span class="tt-legend-text">Live now</span>
+        </div>
+        <div class="tt-legend-item">
+          <span class="tt-slot-badge tt-badge-upcoming">Upcoming</span>
+          <span class="tt-legend-text">Upcoming</span>
+        </div>
+        <div class="tt-legend-item">
+          <span class="tt-slot-badge tt-badge-cancelled">Cancelled/Absent</span>
+          <span class="tt-legend-text">Cancelled/Absent</span>
+        </div>
       </div>
 
       <!-- Mobile Day Selector -->
@@ -2636,7 +2682,7 @@
       </div>
 
       <!-- Mobile Day Cards View -->
-      <div class="tt-mobile-cards-view d-md-none">
+      <div class="tt-mobile-cards-view">
         <h4 style="font-size: 0.9rem; font-weight: 700; margin-bottom: 10px; color: var(--text-muted);">
           ${DAY_NAMES[activeMobileDay]} ${data.weekDates && data.weekDates[activeMobileDay] ? '(' + data.weekDates[activeMobileDay] + ')' : ''}
         </h4>
@@ -2644,7 +2690,7 @@
       </div>
 
       <!-- Desktop Calendar Table -->
-      <div class="tt-calendar-wrapper tt-table-desktop">
+      <div class="tt-calendar-wrapper">
         <table class="tt-table-desktop">
           <thead>
             <tr>${tableHeaderThs}</tr>

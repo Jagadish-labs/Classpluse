@@ -356,7 +356,32 @@ function initSchema() {
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_notifications_uid_type ON notifications(uid, type, course_id)'); } catch(e) {}
   try { db.exec('CREATE TABLE IF NOT EXISTS faculty_reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, faculty_id TEXT NOT NULL, student_id TEXT NOT NULL, course_id TEXT NOT NULL, sent_at INTEGER NOT NULL)'); } catch(e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_faculty_reminders_lookup ON faculty_reminders (student_id, course_id, sent_at)'); } catch(e) {}
-  try { db.exec('ALTER TABLE timetable ADD COLUMN day INTEGER DEFAULT 1'); } catch(e) {}
+  // Safe migration for day column on timetable table
+  try {
+    const tableInfo = db.prepare("PRAGMA table_info(timetable)").all();
+    const hasDay = tableInfo.some(c => c.name === 'day');
+    if (!hasDay) {
+      db.exec('ALTER TABLE timetable ADD COLUMN day INTEGER');
+    }
+  } catch(e) {}
+
+  // Safe migration: Existing slots without a day become Monday to Friday copies
+  try {
+    const slotsWithoutDay = db.prepare('SELECT * FROM timetable WHERE day IS NULL').all();
+    if (slotsWithoutDay.length > 0) {
+      const updateSlotDay = db.prepare('UPDATE timetable SET day = ? WHERE id = ?');
+      const insertSlotCopy = db.prepare(`
+        INSERT INTO timetable (day, course_id, s, e, sub, fac, faculty_id, room, st, note, ts)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const s of slotsWithoutDay) {
+        updateSlotDay.run(1, s.id);
+        for (let d = 2; d <= 5; d++) {
+          insertSlotCopy.run(d, s.course_id, s.s, s.e, s.sub, s.fac, s.faculty_id, s.room, s.st || 'ongoing', s.note || '', s.ts || Date.now());
+        }
+      }
+    }
+  } catch(e) {}
 }
 
 const defaultTimetable = [
@@ -398,17 +423,18 @@ const defaultTimetable = [
   { id: 27, day: 5, course_id: 'CS104', s: '10:55', e: '11:45', sub: 'Software Development', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'C-101', st: 'ongoing', note: '' },
   { id: 28, day: 5, course_id: 'CS101', s: '11:45', e: '12:35', sub: 'Data Structures', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'B-204', st: 'ongoing', note: '' },
   { id: 29, day: 5, course_id: 'CS102', s: '13:30', e: '14:20', sub: 'Data Communications', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-206', st: 'ongoing', note: '' },
+  { id: 30, day: 5, course_id: 'CS105', s: '14:20', e: '15:10', sub: 'Computer Networks Lab', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'Net Lab', st: 'ongoing', note: '' },
 
   // --- SATURDAY (day: 6) ---
-  { id: 30, day: 6, course_id: 'CS101', s: '09:00', e: '09:50', sub: 'Data Structures', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'B-204', st: 'ongoing', note: '' },
-  { id: 31, day: 6, course_id: 'CS102', s: '09:50', e: '10:40', sub: 'Data Communications', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-206', st: 'ongoing', note: '' },
-  { id: 32, day: 6, course_id: 'CS104', s: '10:55', e: '11:45', sub: 'Software Development', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'C-101', st: 'ongoing', note: '' },
-  { id: 33, day: 6, course_id: 'CS105', s: '11:45', e: '12:35', sub: 'Computer Networks', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-210', st: 'ongoing', note: '' }
+  { id: 31, day: 6, course_id: 'CS101', s: '09:00', e: '09:50', sub: 'Data Structures', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'B-204', st: 'ongoing', note: '' },
+  { id: 32, day: 6, course_id: 'CS102', s: '09:50', e: '10:40', sub: 'Data Communications', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-206', st: 'ongoing', note: '' },
+  { id: 33, day: 6, course_id: 'CS104', s: '10:55', e: '11:45', sub: 'Software Development', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'C-101', st: 'ongoing', note: '' },
+  { id: 34, day: 6, course_id: 'CS105', s: '11:45', e: '12:35', sub: 'Computer Networks', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-210', st: 'ongoing', note: '' }
 ];
 
 function seedWeeklyTimetable() {
   const count = db.prepare('SELECT count(*) as count FROM timetable').get().count;
-  if (count < 30) {
+  if (count < 34) {
     db.exec('DELETE FROM timetable');
     try { db.exec("DELETE FROM sqlite_sequence WHERE name = 'timetable'"); } catch(e) {}
     const insertTimetable = db.prepare(`

@@ -1271,24 +1271,297 @@ html, body {
 }
 
 /* Weekly Timetable Calendar */
-.tt-matrix {
+.tt-calendar-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  margin-bottom: 24px;
+  box-shadow: var(--shadow-sm);
+}
+
+.tt-table-desktop {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  font-size: var(--text-xs);
+  min-width: 820px;
 }
 
-.tt-matrix th,
-.tt-matrix td {
-  border: 1px solid var(--border-color);
-  padding: 8px 10px;
+.tt-table-desktop th {
+  background: var(--bg-card-alt, rgba(255, 255, 255, 0.02));
+  color: var(--text-main);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 12px 14px;
+  border-bottom: 2px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  text-align: center;
+}
+
+.tt-table-desktop th:last-child {
+  border-right: none;
+}
+
+.tt-table-desktop td {
+  padding: 8px;
+  border-bottom: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  vertical-align: top;
+}
+
+.tt-table-desktop td:last-child {
+  border-right: none;
+}
+
+.tt-table-desktop tr:last-child td {
+  border-bottom: none;
+}
+
+.tt-table-desktop th.col-today,
+.tt-table-desktop td.col-today {
+  background: rgba(99, 102, 241, 0.06);
+  border-left: 2px solid var(--primary);
+  border-right: 2px solid var(--primary);
+}
+
+.tt-table-desktop th.col-today {
+  color: var(--primary);
 }
 
 .tt-time-cell {
-  background-color: var(--bg-muted);
-  font-weight: 600;
-  color: var(--text-secondary);
+  background: var(--bg-muted, rgba(255, 255, 255, 0.02));
+  font-weight: 700;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-family: var(--font-mono, monospace);
   white-space: nowrap;
+  text-align: center;
+  padding: 10px 8px !important;
+  vertical-align: middle !important;
+  width: 110px;
+}
+
+.tt-cell {
+  min-width: 130px;
+  height: 90px;
+}
+
+.tt-slot-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.tt-slot-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+
+.tt-slot-sub {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-main);
+  line-height: 1.25;
+  margin-bottom: 4px;
+}
+
+.tt-slot-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+/* Status variants */
+.status-completed {
+  background: rgba(16, 185, 129, 0.12) !important;
+  border: 1px solid rgba(16, 185, 129, 0.4) !important;
+}
+.status-completed .tt-slot-sub {
+  color: #10b981 !important;
+}
+
+.status-live {
+  background: rgba(59, 130, 246, 0.1) !important;
+  border: 2px solid #3b82f6 !important;
+  animation: pulse-live 1.8s infinite;
+}
+
+@keyframes pulse-live {
+  0% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(59, 130, 246, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+  }
+}
+
+.status-cancelled {
+  background: rgba(148, 163, 184, 0.1) !important;
+  border: 1px solid rgba(148, 163, 184, 0.35) !important;
+  opacity: 0.85;
+}
+.status-cancelled .tt-slot-sub {
+  color: #94a3b8 !important;
+}
+
+.status-absent {
+  background: rgba(239, 68, 68, 0.1) !important;
+  border: 1px solid rgba(239, 68, 68, 0.4) !important;
+}
+.status-absent .tt-slot-sub {
+  color: #f87171 !important;
+}
+
+.status-delayed {
+  background: rgba(245, 158, 11, 0.1) !important;
+  border: 1px solid rgba(245, 158, 11, 0.4) !important;
+}
+
+.status-sub {
+  background: rgba(168, 85, 247, 0.1) !important;
+  border: 1px solid rgba(168, 85, 247, 0.4) !important;
+}
+
+.status-upcoming {
+  background: var(--bg-card);
+}
+
+/* Badges */
+.tt-slot-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 3px 7px;
+  border-radius: 9999px;
+  width: fit-content;
+}
+
+.tt-badge-completed {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.tt-badge-live {
+  background: rgba(59, 130, 246, 0.2);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+}
+
+.tt-badge-upcoming {
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--text-muted);
+}
+
+.tt-badge-cancelled {
+  background: rgba(148, 163, 184, 0.2);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.tt-badge-absent {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+/* Legend */
+.tt-legend-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  margin-bottom: 16px;
+  font-size: 0.78rem;
+}
+
+.tt-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tt-legend-text {
+  color: var(--text-muted);
+}
+
+/* Mobile Day Selector */
+.tt-mobile-nav {
+  display: none;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.tt-mobile-day-btn {
+  padding: 8px 4px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-align: center;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tt-mobile-day-btn.active {
+  background: var(--primary);
+  color: #ffffff;
+  border-color: var(--primary);
+  box-shadow: 0 2px 8px rgba(79, 70, 229, 0.4);
+}
+
+.tt-mobile-cards-view {
+  display: none;
+  margin-bottom: 24px;
+}
+
+@media (max-width: 768px) {
+  .tt-calendar-wrapper {
+    display: none;
+  }
+  .tt-mobile-nav {
+    display: grid;
+  }
+  .tt-mobile-cards-view {
+    display: block;
+  }
+}
+
+@media (min-width: 769px) {
+  .tt-mobile-nav {
+    display: none;
+  }
+  .tt-mobile-cards-view {
+    display: none;
+  }
+  .tt-calendar-wrapper {
+    display: block;
+  }
 }
 
 /* ==========================================================================
