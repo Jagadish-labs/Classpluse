@@ -57,7 +57,8 @@
     absent:  { label: 'Faculty Absent', badgeClass: 'badge-absent', color: '#ef4444' },
     sub:     { label: 'Substitute Assigned', badgeClass: 'badge-sub', color: '#8b5cf6' },
     cancelled:{ label: 'Class Cancelled', badgeClass: 'badge-cancelled', color: '#6b7280' },
-    resched: { label: 'Rescheduled', badgeClass: 'badge-resched', color: '#06b6d4' }
+    resched: { label: 'Rescheduled', badgeClass: 'badge-resched', color: '#06b6d4' },
+    completed:{ label: 'Completed', badgeClass: 'badge-completed', color: '#10b981' }
   };
 
   const CATEGORIES = ['All', 'Tech', 'Cultural', 'Sports', 'Workshop', 'Placement', 'Club', 'Fest', 'Seminar'];
@@ -565,117 +566,160 @@
 
       const { cls: activeCls, mode } = resolveActiveClass(liveTimetableState);
       const action = computeActionLine(activeCls, mode, liveTimetableState);
-      const stMeta = activeCls ? (STATUS_META[activeCls.st] || STATUS_META.ongoing) : STATUS_META.ongoing;
+      const isFinished = mode === 'finished';
+      const stMeta = isFinished ? STATUS_META.completed : (activeCls ? (STATUS_META[activeCls.st] || STATUS_META.ongoing) : STATUS_META.ongoing);
       const next3Events = (eventsData.events || []).slice(0, 3);
 
       container.innerHTML = `
-        <!-- HERO CARD: RIGHT NOW -->
-        <section class="section-block">
-          <div class="section-head">
-            <span style="font-size: 0.8rem; font-weight: 800; color: var(--text-muted); letter-spacing: 0.05em;">● RIGHT NOW</span>
-            <span style="font-size: 0.75rem; color: var(--text-faint); font-family: var(--font-mono);">${activeCls ? 'Updated ' + formatRelativeTime(activeCls.ts) : ''}</span>
-          </div>
-
-          <div class="hero-card st-${activeCls ? activeCls.st : 'ongoing'}" id="studentHeroCard">
-            <div class="hero-top-row">
-              <span class="hero-time-badge">⏰ ${activeCls ? activeCls.s + ' - ' + activeCls.e : '--:-- - --:--'}</span>
-              <span class="status-badge ${stMeta.badgeClass}">● ${stMeta.label}</span>
-            </div>
-
-            <div>
-              <h2 class="hero-subject">${escapeHtml(activeCls ? activeCls.sub : 'No Active Class')}</h2>
-              <div class="hero-meta-row mt-2">
-                <span class="meta-pill">👨‍🏫 Faculty: <strong>${escapeHtml(activeCls ? activeCls.fac : '--')}</strong></span>
-                <span class="meta-pill">📍 Room: <strong>${escapeHtml(activeCls ? activeCls.room : '--')}</strong></span>
+        <!-- TOP RESPONSIVE GRID: Left (Right Now + Timetable) / Right (Attendance + To-Do) -->
+        <div class="classes-dashboard-grid">
+          <div class="classes-left-col">
+            <!-- HERO CARD: RIGHT NOW -->
+            <section class="section-block">
+              <div class="section-head">
+                <span style="font-size: 0.8rem; font-weight: 800; color: var(--text-muted); letter-spacing: 0.05em;">● RIGHT NOW</span>
+                <span style="font-size: 0.75rem; color: var(--text-faint); font-family: var(--font-mono);">${activeCls ? 'Updated ' + formatRelativeTime(activeCls.ts) : ''}</span>
               </div>
-              ${activeCls && activeCls.note ? `<div class="hero-note-callout mt-2">💬 <strong>Faculty Note:</strong> ${escapeHtml(activeCls.note)}</div>` : ''}
-            </div>
 
-            <!-- ACTION LINE DIRECTIVE -->
-            <div class="action-box">
-              <div class="action-top-label">
-                <span class="directive-pill">STUDENT DIRECTIVE</span>
-                <span style="font-size: 0.7rem; color: var(--text-muted);">What to do right now</span>
-              </div>
-              <p class="action-line-main">${escapeHtml(action.primary)}</p>
-              <p class="action-line-sub">${escapeHtml(action.secondary)}</p>
-            </div>
-          </div>
-        </section>
+              <div class="hero-card st-${isFinished ? 'completed' : (activeCls ? activeCls.st : 'ongoing')}" id="studentHeroCard">
+                <div class="hero-top-row">
+                  <span class="hero-time-badge">⏰ ${activeCls ? activeCls.s + ' - ' + activeCls.e : '--:-- - --:--'}</span>
+                  <span class="status-badge ${stMeta.badgeClass}">● ${stMeta.label}</span>
+                </div>
 
-        <!-- ATTENDANCE ALERTS (<75%) -->
-        <section class="section-block">
-          <div class="section-head">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span style="font-size: 1.1rem;">📊</span>
-              <h3 class="section-title">Attendance Status</h3>
-            </div>
-            <span style="font-size: 0.75rem; color: ${(summaryData.alerts && summaryData.alerts.length > 0) ? 'var(--danger)' : '#10b981'}; font-weight: 700;">
-              ${(summaryData.alerts && summaryData.alerts.length > 0) ? '● Action Required' : '● In Good Standing'}
-            </span>
-          </div>
-          ${(summaryData.alerts && summaryData.alerts.length > 0) ? `
-            <div class="attendance-alert-card">
-              <span style="font-size: 1.3rem;">⚠️</span>
-              <div>
-                <strong>Attendance Shortage Warning (<75%)</strong>
-                ${summaryData.alerts.map(a => `
-                  <p style="font-size: 0.8rem; margin-top: 2px;">
-                    <strong>${escapeHtml(a.name)} (${escapeHtml(a.code)}):</strong> Current ${a.percentage}%. You need to attend <strong>${a.neededClasses}</strong> more consecutive classes to reach 75%.
-                  </p>
-                `).join('')}
-              </div>
-            </div>
-          ` : `
-            <div style="padding: 14px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: var(--radius-md); font-size: 0.82rem; color: #10b981; display: flex; align-items: center; gap: 8px;">
-              <span>🌟</span>
-              <span>All enrolled courses are currently above the mandatory 75% attendance threshold.</span>
-            </div>
-          `}
-        </section>
-
-        <!-- TO-DO (NEXT 5 UPCOMING ASSIGNMENTS) -->
-        <section class="section-block">
-          <div class="section-head">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span style="font-size: 1.1rem;">📝</span>
-              <h3 class="section-title">To-Do (Upcoming Assignments)</h3>
-            </div>
-            <span style="font-size: 0.75rem; color: var(--text-muted);">${summaryData.todo.length} unsubmitted</span>
-          </div>
-
-          <div style="display: flex; flex-direction: column; gap: 8px;">
-            ${summaryData.todo.length === 0 ? `
-              <div style="padding: 14px; background: var(--bg-card); border: 1px solid var(--border-glass); border-radius: var(--radius-md); font-size: 0.82rem; color: var(--text-muted);">
-                🎉 All caught up! No pending assignments due.
-              </div>
-            ` : summaryData.todo.map(t => {
-              const due = new Date(t.due_date);
-              const now = new Date();
-              const isOverdue = now > due;
-              const isDueSoon = !isOverdue && (due - now) < (24 * 3600 * 1000);
-              const tagClass = isOverdue ? 'due-overdue' : isDueSoon ? 'due-soon' : 'due-normal';
-              const tagLabel = isOverdue ? 'Overdue' : isDueSoon ? 'Due Soon' : 'Assigned';
-
-              return `
-                <div class="assignment-card" onclick="window.location.hash='#course/${t.course_id}?tab=classwork'" style="cursor: pointer;">
-                  <div>
-                    <strong>${escapeHtml(t.title)}</strong>
-                    <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">
-                      ${escapeHtml(t.course_name)} (${escapeHtml(t.code)}) • Max ${t.max_points} pts
-                    </div>
+                <div>
+                  <h2 class="hero-subject">${escapeHtml(activeCls ? activeCls.sub : 'No Active Class')}</h2>
+                  <div class="hero-meta-row mt-2">
+                    <span class="meta-pill">👨‍🏫 Faculty: <strong>${escapeHtml(activeCls ? activeCls.fac : '--')}</strong></span>
+                    <span class="meta-pill">📍 Room: <strong>${escapeHtml(activeCls ? activeCls.room : '--')}</strong></span>
                   </div>
-                  <div style="text-align: right;">
-                    <span class="due-tag ${tagClass}">${tagLabel}</span>
-                    <div style="font-size: 0.7rem; color: var(--text-faint); margin-top: 3px; font-family: var(--font-mono);">
-                      Due ${due.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                  ${activeCls && activeCls.note ? `<div class="hero-note-callout mt-2">💬 <strong>Faculty Note:</strong> ${escapeHtml(activeCls.note)}</div>` : ''}
+                </div>
+
+                <!-- ACTION LINE DIRECTIVE -->
+                <div class="action-box">
+                  <div class="action-top-label">
+                    <span class="directive-pill">STUDENT DIRECTIVE</span>
+                    <span style="font-size: 0.7rem; color: var(--text-muted);">What to do right now</span>
+                  </div>
+                  <p class="action-line-main">${escapeHtml(action.primary)}</p>
+                  <p class="action-line-sub">${escapeHtml(action.secondary)}</p>
+                </div>
+              </div>
+            </section>
+
+            <!-- TODAY'S FULL SCHEDULE -->
+            <section class="section-block">
+              <div class="section-head">
+                <h3 class="section-title">📅 Today's Schedule</h3>
+                <span style="font-size: 0.75rem; color: var(--text-muted);">6 Periods</span>
+              </div>
+
+              <div class="schedule-grid" id="studentScheduleList">
+                ${liveTimetableState.classes.length === 0 ? `
+                  <div class="class-card" style="padding: 24px; text-align: center; color: var(--text-muted); font-size: 0.85rem;">
+                    📅 No scheduled classes found for today.
+                  </div>
+                ` : liveTimetableState.classes.map(cls => {
+                  const meta = STATUS_META[cls.st] || STATUS_META.ongoing;
+                  const isActive = activeCls && activeCls.id === cls.id;
+                  return `
+                    <div class="class-card ${isActive ? 'is-active' : ''}" id="card-period-${cls.id}">
+                      <div class="card-title-row">
+                        <span class="card-time">⏰ ${cls.s} - ${cls.e}</span>
+                        <span class="status-badge ${meta.badgeClass}">● ${meta.label}</span>
+                      </div>
+                      <div class="card-title-row" style="margin-top: 2px;">
+                        <h4 class="card-title">${escapeHtml(cls.sub)}</h4>
+                        <span class="card-room">📍 ${escapeHtml(cls.room)}</span>
+                      </div>
+                      <div style="font-size: 0.78rem; color: var(--text-muted);">
+                        👨‍🏫 ${escapeHtml(cls.fac)}
+                      </div>
+                      ${cls.note ? `<div style="font-size: 0.75rem; background: rgba(245, 158, 11, 0.08); padding: 4px 8px; border-left: 2px solid #f59e0b; border-radius: 0 4px 4px 0;">💬 ${escapeHtml(cls.note)}</div>` : ''}
                     </div>
+                  `;
+                }).join('')}
+              </div>
+            </section>
+          </div>
+
+          <div class="classes-right-col">
+            <!-- ATTENDANCE ALERTS (<75%) -->
+            <section class="section-block">
+              <div class="section-head">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="font-size: 1.1rem;">📊</span>
+                  <h3 class="section-title">Attendance Status</h3>
+                </div>
+                <span style="font-size: 0.75rem; color: ${(summaryData.alerts && summaryData.alerts.length > 0) ? 'var(--danger)' : '#10b981'}; font-weight: 700;">
+                  ${(summaryData.alerts && summaryData.alerts.length > 0) ? '● Action Required' : '● In Good Standing'}
+                </span>
+              </div>
+              ${(summaryData.alerts && summaryData.alerts.length > 0) ? `
+                <div class="attendance-alert-card">
+                  <span style="font-size: 1.3rem;">⚠️</span>
+                  <div>
+                    <strong>Attendance Shortage Warning (<75%)</strong>
+                    ${summaryData.alerts.map(a => `
+                      <p style="font-size: 0.8rem; margin-top: 2px;">
+                        <strong>${escapeHtml(a.name)} (${escapeHtml(a.code)}):</strong> Current ${a.percentage}%. You need to attend <strong>${a.neededClasses}</strong> more consecutive classes to reach 75%.
+                      </p>
+                    `).join('')}
                   </div>
                 </div>
-              `;
-            }).join('')}
+              ` : `
+                <div style="padding: 14px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: var(--radius-md); font-size: 0.82rem; color: #10b981; display: flex; align-items: center; gap: 8px;">
+                  <span>🌟</span>
+                  <span>All enrolled courses are currently above the mandatory 75% attendance threshold.</span>
+                </div>
+              `}
+            </section>
+
+            <!-- TO-DO (NEXT 5 UPCOMING ASSIGNMENTS) -->
+            <section class="section-block">
+              <div class="section-head">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="font-size: 1.1rem;">📝</span>
+                  <h3 class="section-title">To-Do (Upcoming Assignments)</h3>
+                </div>
+                <span style="font-size: 0.75rem; color: var(--text-muted);">${summaryData.todo.length} unsubmitted</span>
+              </div>
+
+              <div style="display: flex; flex-direction: column; gap: 8px;">
+                ${summaryData.todo.length === 0 ? `
+                  <div style="padding: 14px; background: var(--bg-card); border: 1px solid var(--border-glass); border-radius: var(--radius-md); font-size: 0.82rem; color: var(--text-muted);">
+                    🎉 All caught up! No pending assignments due.
+                  </div>
+                ` : summaryData.todo.map(t => {
+                  const due = new Date(t.due_date);
+                  const now = new Date();
+                  const isOverdue = now > due;
+                  const isDueSoon = !isOverdue && (due - now) < (24 * 3600 * 1000);
+                  const tagClass = isOverdue ? 'due-overdue' : isDueSoon ? 'due-soon' : 'due-normal';
+                  const tagLabel = isOverdue ? 'Overdue' : isDueSoon ? 'Due Soon' : 'Assigned';
+
+                  return `
+                    <div class="assignment-card" onclick="window.location.hash='#course/${t.course_id}?tab=classwork'" style="cursor: pointer;">
+                      <div>
+                        <strong>${escapeHtml(t.title)}</strong>
+                        <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">
+                          ${escapeHtml(t.course_name)} (${escapeHtml(t.code)}) • Max ${t.max_points} pts
+                        </div>
+                      </div>
+                      <div style="text-align: right;">
+                        <span class="due-tag ${tagClass}">${tagLabel}</span>
+                        <div style="font-size: 0.7rem; color: var(--text-faint); margin-top: 3px; font-family: var(--font-mono);">
+                          Due ${due.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </section>
           </div>
-        </section>
+        </div>
 
         <!-- GOOGLE CLASSROOM COURSES -->
         <section class="section-block">
@@ -734,41 +778,6 @@
                 <div style="font-size: 0.75rem; color: var(--text-muted);">📍 ${escapeHtml(ev.venue)}</div>
               </div>
             `).join('')}
-          </div>
-        </section>
-
-        <!-- TODAY'S FULL SCHEDULE -->
-        <section class="section-block">
-          <div class="section-head">
-            <h3 class="section-title">📅 Today's Schedule</h3>
-            <span style="font-size: 0.75rem; color: var(--text-muted);">6 Periods</span>
-          </div>
-
-          <div class="schedule-grid" id="studentScheduleList">
-            ${liveTimetableState.classes.length === 0 ? `
-              <div class="class-card" style="padding: 24px; text-align: center; color: var(--text-muted); font-size: 0.85rem;">
-                📅 No scheduled classes found for today.
-              </div>
-            ` : liveTimetableState.classes.map(cls => {
-              const meta = STATUS_META[cls.st] || STATUS_META.ongoing;
-              const isActive = activeCls && activeCls.id === cls.id;
-              return `
-                <div class="class-card ${isActive ? 'is-active' : ''}" id="card-period-${cls.id}">
-                  <div class="card-title-row">
-                    <span class="card-time">⏰ ${cls.s} - ${cls.e}</span>
-                    <span class="status-badge ${meta.badgeClass}">● ${meta.label}</span>
-                  </div>
-                  <div class="card-title-row" style="margin-top: 2px;">
-                    <h4 class="card-title">${escapeHtml(cls.sub)}</h4>
-                    <span class="card-room">📍 ${escapeHtml(cls.room)}</span>
-                  </div>
-                  <div style="font-size: 0.78rem; color: var(--text-muted);">
-                    👨‍🏫 ${escapeHtml(cls.fac)}
-                  </div>
-                  ${cls.note ? `<div style="font-size: 0.75rem; background: rgba(245, 158, 11, 0.08); padding: 4px 8px; border-left: 2px solid #f59e0b; border-radius: 0 4px 4px 0;">💬 ${escapeHtml(cls.note)}</div>` : ''}
-                </div>
-              `;
-            }).join('')}
           </div>
         </section>
       `;
@@ -1964,7 +1973,7 @@
           </div>
 
           <!-- SEARCH & DATE FILTERS -->
-          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <div class="events-filter-bar">
             <input type="text" id="eventSearchInput" class="form-input" style="flex: 1; min-width: 200px;" placeholder="🔍 Search events, venues, organizers..." value="${escapeHtml(activeEventSearch)}" oninput="window.ClassPulse.handleEventSearch(this.value)">
             <div class="filter-group">
               <button class="filter-btn ${activeEventDateFilter === 'all' ? 'active' : ''}" onclick="window.ClassPulse.setEventDateFilter('all')">All Dates</button>
@@ -1987,16 +1996,16 @@
         ${happeningData.happeningNow && happeningData.happeningNow.length > 0 ? `
           <section class="section-block">
             <div class="happening-strip">
-              <div style="display: flex; align-items: center; gap: 10px;">
+              <div class="happening-strip-info">
                 <span class="live-event-badge">● LIVE NOW</span>
-                <div>
-                  <strong style="font-size: 0.95rem;">${escapeHtml(happeningData.happeningNow[0].title)}</strong>
-                  <div style="font-size: 0.76rem; color: var(--text-muted);">
+                <div class="happening-strip-text">
+                  <strong class="happening-title">${escapeHtml(happeningData.happeningNow[0].title)}</strong>
+                  <div class="happening-details">
                     📍 ${escapeHtml(happeningData.happeningNow[0].venue)} • Ends ${new Date(happeningData.happeningNow[0].end_ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </div>
                 </div>
               </div>
-              <button class="btn btn-sm btn-primary" onclick="window.location.hash='#event/${happeningData.happeningNow[0].id}'">View Live →</button>
+              <button class="btn btn-sm btn-primary happening-btn" onclick="window.location.hash='#event/${happeningData.happeningNow[0].id}'">View Live →</button>
             </div>
           </section>
         ` : ''}
@@ -2041,7 +2050,7 @@
             <h3 class="section-title">📅 All Events (${allEventsData.events.length})</h3>
           </div>
 
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 14px;">
+          <div class="events-grid">
             ${allEventsData.events.length === 0 ? `
               <div class="class-card" style="padding: 24px; text-align: center; color: var(--text-muted); grid-column: 1 / -1;">
                 No campus events found matching your filters.
@@ -2224,7 +2233,7 @@
       const data = await fetchApi('/api/events/my-events');
 
       container.innerHTML = `
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <div class="my-passes-header">
           <div>
             <h2 style="font-size: 1.4rem; font-weight: 800;">🎟️ My Event Passes</h2>
             <p style="font-size: 0.8rem; color: var(--text-muted);">Present your digital pass QR code at the venue check-in desk</p>
@@ -2232,7 +2241,7 @@
           <a href="#events" class="btn btn-sm btn-primary">Browse Campus Events</a>
         </div>
 
-        <div style="display: flex; flex-direction: column; gap: 16px;">
+        <div class="passes-grid">
           ${data.myEvents.length === 0 ? `
             <div class="class-card" style="padding: 30px; text-align: center; color: var(--text-muted);">
               You have not registered for any upcoming campus events yet.

@@ -145,30 +145,34 @@
       </div>
     </header>
 
-    <!-- DESKTOP TOP BAR (With Page Title) -->
-    <div id="desktopTopBar" class="desktop-topbar">
-      <div class="topbar-title-wrap">
-        <h1 id="topBarPageTitle" class="topbar-page-title">Classes & Directives</h1>
+    <!-- MAIN COLUMN (Top bar, main content, footer) -->
+    <div class="main-column" id="mainColumn">
+      <!-- DESKTOP TOP BAR (With Page Title) -->
+      <div id="desktopTopBar" class="desktop-topbar">
+        <div class="topbar-title-wrap">
+          <h1 id="topBarPageTitle" class="topbar-page-title">Classes & Directives</h1>
+        </div>
       </div>
+
+      <!-- MAIN VIEW CONTAINER -->
+      <main id="mainContainer" class="main-content">
+        <div class="loading-spinner-view">
+          <div class="spinner"></div>
+          <p>Connecting to ClassPulse live network...</p>
+          <span class="hidden" aria-hidden="true">RIGHT NOW Directives & Classroom</span>
+        </div>
+      </main>
+
+      <!-- FOOTER -->
+      <footer class="app-footer">
+        <div class="footer-container">
+          <p><strong>ClassPulse</strong> — Live Class Directives, Google Classroom & Campus Events</p>
+          <p class="footer-tagline">"One screen that tells a student what to do right now, not just what is happening."</p>
+          <p class="footer-copy">ClassPulse - Tech Heist Buildathon • Real-Time Multi-Role Campus System</p>
+        </div>
+      </footer>
     </div>
 
-    <!-- MAIN VIEW CONTAINER -->
-    <main id="mainContainer" class="main-content">
-      <div class="loading-spinner-view">
-        <div class="spinner"></div>
-        <p>Connecting to ClassPulse live network...</p>
-        <span class="hidden" aria-hidden="true">RIGHT NOW Directives & Classroom</span>
-      </div>
-    </main>
-
-    <!-- FOOTER -->
-    <footer class="app-footer">
-      <div class="footer-container">
-        <p><strong>ClassPulse</strong> — Live Class Directives, Google Classroom & Campus Events</p>
-        <p class="footer-tagline">"One screen that tells a student what to do right now, not just what is happening."</p>
-        <p class="footer-copy">ClassPulse - Tech Heist Buildathon • Real-Time Multi-Role Campus System</p>
-      </div>
-    </footer>
 
     <!-- MODAL CONTAINER (Dialogs, QR Scanner, Event Detail, Submissions) -->
     <div id="globalModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
