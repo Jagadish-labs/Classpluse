@@ -194,3 +194,5 @@ Embedded chat assistant (`#assistant`) tailored with campus data isolation:
 - **Responsive Navigation:** Full desktop sidebar with active route states and a sleek bottom navigation bar on mobile devices.
 - **Dark Mode Support:** Automatic detection and manual toggle persisted via `localStorage`.
 
+#   C l a s s p l u s e  
+ 
