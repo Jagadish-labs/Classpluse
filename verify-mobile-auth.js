@@ -1,7 +1,25 @@
 const http = require('http');
 const assert = require('assert');
+const { spawn } = require('child_process');
 const { db, seedDatabase } = require('./db');
 const { normalizePhone, looksLikePhone } = require('./auth');
+
+async function isServerRunning() {
+  try {
+    const res = await fetch('http://localhost:3000/api/config');
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function waitForServer(maxAttempts = 30) {
+  for (let i = 0; i < maxAttempts; i++) {
+    if (await isServerRunning()) return true;
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return false;
+}
 
 function createSession() {
   let cookie = '';
@@ -53,6 +71,26 @@ function createSession() {
 async function runMobileAuthVerification() {
   console.log('===============================================================');
   console.log('🧪 Starting Mobile Number Authentication Verification Suite...');
+  console.log('===============================================================\n');
+
+  let serverProcess = null;
+  const alreadyRunning = await isServerRunning();
+
+  if (!alreadyRunning) {
+    console.log('Starting ClassPulse server for tests...');
+    serverProcess = spawn('node', ['server.js'], {
+      cwd: __dirname,
+      env: { ...process.env, DEMO: '1', PORT: '3000' },
+      stdio: 'inherit',
+      shell: true
+    });
+    const ready = await waitForServer();
+    if (!ready) {
+      throw new Error('Server failed to start within timeout');
+    }
+  }
+
+  try {
   console.log('===============================================================\n');
 
   // Test 1: Unit tests on normalizePhone
@@ -248,6 +286,11 @@ async function runMobileAuthVerification() {
   console.log('\n===============================================================');
   console.log('🎉 ALL MOBILE NUMBER AUTHENTICATION TESTS PASSED (100%)!');
   console.log('===============================================================\n');
+  } finally {
+    if (serverProcess) {
+      serverProcess.kill();
+    }
+  }
 }
 
 runMobileAuthVerification().catch((err) => {
