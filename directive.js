@@ -16,7 +16,18 @@ function resolveActiveClass(state, customMinutes) {
   const classes = (state && state.classes) || [];
   if (classes.length === 0) return { cls: null, mode: 'empty' };
 
-  const currentMins = customMinutes !== undefined ? customMinutes : getCurrentMinutes();
+  let currentMins = customMinutes;
+  if (currentMins === undefined) {
+    if (state && state.effectiveNow) {
+      const d = new Date(state.effectiveNow);
+      if (!isNaN(d.getTime())) {
+        currentMins = d.getHours() * 60 + d.getMinutes();
+      }
+    }
+    if (currentMins === undefined) {
+      currentMins = getCurrentMinutes();
+    }
+  }
 
   // 1. Live matching class
   const live = classes.find(c => {

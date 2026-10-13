@@ -10,28 +10,82 @@ const JWT_SECRET = SECRET || 'classpulse_super_secure_jwt_secret_2026_buildathon
 const COOKIE_NAME = 'classpulse_token';
 const SESSION_EXPIRY = '8h';
 
-// Failed passkeys: 5 per minute per College ID (not per IP — shared Wi-Fi must not lock the campus)
-const failedLoginsByUid = new Map();
+// Failed passkeys: 5 per minute per identifier (College ID or phone - not per IP to avoid Wi-Fi lockout)
+const failedLoginsByIdentifier = new Map();
 const LOGIN_WINDOW_MS = 60 * 1000;
-const MAX_FAILED_PER_UID = 5;
+const MAX_FAILED_PER_IDENTIFIER = 5;
+
+/**
+ * Normalizes Indian mobile numbers.
+ * Accepts 10 digits starting with 6-9, with or without +91, 91, 0, spaces, dashes.
+ * Normalizes and returns format '+91XXXXXXXXXX'.
+ * Returns null if invalid.
+ */
+function normalizePhone(input) {
+  if (typeof input !== 'string' && typeof input !== 'number') return null;
+  const str = String(input).trim();
+  if (!str) return null;
+
+  // Remove spaces, dashes, parentheses, dots
+  const cleaned = str.replace(/[\s\-\(\)\.]/g, '');
+
+  let digits = '';
+  if (cleaned.startsWith('+91')) {
+    digits = cleaned.slice(3);
+  } else if (cleaned.startsWith('91') && cleaned.length === 12) {
+    digits = cleaned.slice(2);
+  } else if (cleaned.startsWith('0') && cleaned.length === 11) {
+    digits = cleaned.slice(1);
+  } else {
+    digits = cleaned;
+  }
+
+  // Must be exactly 10 digits starting with 6-9
+  if (/^[6-9]\d{9}$/.test(digits)) {
+    return `+91${digits}`;
+  }
+  return null;
+}
+
+function looksLikePhone(input) {
+  if (typeof input !== 'string' && typeof input !== 'number') return false;
+  const str = String(input).trim();
+  if (!str) return false;
+  const cleaned = str.replace(/[\s\-\(\)\.]/g, '');
+  if (cleaned.startsWith('+')) return true;
+  // If numeric and 8 to 12 digits
+  if (/^\d{8,12}$/.test(cleaned)) return true;
+  return false;
+}
 
 function normalizeUid(uid) {
   return String(uid || '').trim().toUpperCase();
 }
 
-function pruneFailedLogins(uid) {
+function normalizeIdentifier(raw) {
+  if (!raw) return '';
+  if (looksLikePhone(raw)) {
+    const p = normalizePhone(raw);
+    if (p) return p;
+    return String(raw).trim().replace(/[\s\-\(\)\.]/g, '');
+  }
+  return normalizeUid(raw);
+}
+
+function pruneFailedLogins(identifier) {
   const now = Date.now();
-  const list = (failedLoginsByUid.get(uid) || []).filter(ts => now - ts < LOGIN_WINDOW_MS);
-  if (list.length) failedLoginsByUid.set(uid, list);
-  else failedLoginsByUid.delete(uid);
+  const list = (failedLoginsByIdentifier.get(identifier) || []).filter(ts => now - ts < LOGIN_WINDOW_MS);
+  if (list.length) failedLoginsByIdentifier.set(identifier, list);
+  else failedLoginsByIdentifier.delete(identifier);
   return list;
 }
 
 function rateLimitLogin(req, res, next) {
-  const uid = normalizeUid(req.body && req.body.uid);
-  if (!uid) return next();
-  const recent = pruneFailedLogins(uid);
-  if (recent.length >= MAX_FAILED_PER_UID) {
+  const raw = req.body && (req.body.identifier || req.body.uid || req.body.phone);
+  const identifier = normalizeIdentifier(raw);
+  if (!identifier) return next();
+  const recent = pruneFailedLogins(identifier);
+  if (recent.length >= MAX_FAILED_PER_IDENTIFIER) {
     return res.status(429).json({
       error: 'Too many login attempts. Please wait 1 minute before trying again.'
     });
@@ -39,16 +93,17 @@ function rateLimitLogin(req, res, next) {
   next();
 }
 
-function recordFailedLogin(uid) {
-  const key = normalizeUid(uid);
+function recordFailedLogin(raw) {
+  const key = normalizeIdentifier(raw);
   if (!key) return;
   const list = pruneFailedLogins(key);
   list.push(Date.now());
-  failedLoginsByUid.set(key, list);
+  failedLoginsByIdentifier.set(key, list);
 }
 
-function clearFailedLogins(uid) {
-  failedLoginsByUid.delete(normalizeUid(uid));
+function clearFailedLogins(raw) {
+  const key = normalizeIdentifier(raw);
+  if (key) failedLoginsByIdentifier.delete(key);
 }
 
 function generateToken(user) {
@@ -101,7 +156,7 @@ function authenticate(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const user = db.prepare('SELECT uid, role, name, dept, section, must_change_pass, is_organizer FROM users WHERE uid = ?').get(decoded.uid);
+    const user = db.prepare('SELECT uid, role, name, dept, section, must_change_pass, is_organizer, phone FROM users WHERE uid = ?').get(decoded.uid);
 
     if (!user) {
       clearAuthCookie(res);
@@ -193,9 +248,33 @@ function requireStudentSelfOrStaff(req, res, next) {
   res.status(403).json({ error: 'Access forbidden' });
 }
 
+function hasValidSession(req) {
+  let token = req.cookies ? req.cookies[COOKIE_NAME] : null;
+
+  if (!token && req.headers.authorization) {
+    const parts = req.headers.authorization.split(' ');
+    if (parts.length === 2 && parts[0] === 'Bearer') {
+      token = parts[1];
+    }
+  }
+
+  if (!token) return false;
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = db.prepare('SELECT uid FROM users WHERE uid = ?').get(decoded.uid);
+    return Boolean(user);
+  } catch (err) {
+    return false;
+  }
+}
+
 module.exports = {
   JWT_SECRET,
   COOKIE_NAME,
+  normalizePhone,
+  looksLikePhone,
+  normalizeIdentifier,
   rateLimitLogin,
   recordFailedLogin,
   clearFailedLogins,
@@ -203,6 +282,7 @@ module.exports = {
   setAuthCookie,
   clearAuthCookie,
   authenticate,
+  hasValidSession,
   requireRole,
   requireEventOrganizer,
   requireCourseAccess,

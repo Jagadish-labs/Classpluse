@@ -427,8 +427,8 @@
           <form id="loginForm" onsubmit="window.ClassPulse.handleLogin(event)">
             <input type="hidden" id="loginRole" value="STUDENT">
             <div class="form-group">
-              <label for="loginUid">College ID (UID) *</label>
-              <input type="text" id="loginUid" class="form-input" placeholder="e.g. STU001 / FAC001 / ADMIN001" required autocomplete="username">
+              <label for="loginUid">College ID or mobile number *</label>
+              <input type="text" id="loginUid" class="form-input" placeholder="e.g. STU001 or 9000000001" required autocomplete="username">
             </div>
 
             <div class="form-group mt-2">
@@ -489,8 +489,8 @@
           <div class="demo-accounts-box mb-3" style="margin-bottom: 12px;">
             <span>🧪 Unregistered Demo IDs to try:</span>
             <div style="margin-top: 4px;">
-              <span class="demo-chip" onclick="window.ClassPulse.fillSignup('STU101', 'Demo Student')">STU101 (Demo Student)</span>
-              <span class="demo-chip" onclick="window.ClassPulse.fillSignup('FAC101', 'Demo Faculty')">FAC101 (Demo Faculty)</span>
+              <span class="demo-chip" onclick="window.ClassPulse.fillSignup('STU101', 'Demo Student', '9000000101')">STU101 (Demo Student)</span>
+              <span class="demo-chip" onclick="window.ClassPulse.fillSignup('FAC101', 'Demo Faculty', '9100000101')">FAC101 (Demo Faculty)</span>
             </div>
           </div>
           ` : ''}
@@ -504,6 +504,11 @@
             <div class="form-group mt-2">
               <label for="signupName">Full Name (must match roster records) *</label>
               <input type="text" id="signupName" class="form-input" placeholder="e.g. Demo Student" required>
+            </div>
+
+            <div class="form-group mt-2">
+              <label for="signupPhone">Mobile Number (required if on campus roster)</label>
+              <input type="tel" id="signupPhone" class="form-input" placeholder="e.g. 9000000101">
             </div>
 
             <div class="form-group mt-2">
@@ -1574,15 +1579,15 @@
                 <input type="file" id="rosterCsvFile" accept=".csv" class="form-input" style="padding: 4px;" required>
                 <button type="submit" class="btn btn-sm btn-secondary">Upload CSV</button>
               </form>
-              <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 4px;">CSV Format: UID, Role, Full Name, Department, Section, IsOrganizer</div>
+              <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 4px;">CSV Format: UID, Role, Full Name, Department, Section, IsOrganizer, Phone (optional)</div>
             </div>
 
             <div class="table-responsive mt-2" style="max-height: 260px;">
               <table class="data-table">
-                <thead><tr><th>UID</th><th>Role</th><th>Full Name</th><th>Dept</th><th>Section</th><th>Status</th><th>Action</th></tr></thead>
+                <thead><tr><th>UID</th><th>Role</th><th>Full Name</th><th>Dept</th><th>Section</th><th>Phone</th><th>Status</th><th>Action</th></tr></thead>
                 <tbody>
                   ${rosterData.roster.length === 0 ? `
-                    <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 24px;">No students or faculty in roster yet.</td></tr>
+                    <tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 24px;">No students or faculty in roster yet.</td></tr>
                   ` : rosterData.roster.map(r => `
                     <tr>
                       <td><strong>${escapeHtml(r.uid)}</strong></td>
@@ -1590,6 +1595,7 @@
                       <td>${escapeHtml(r.name)}</td>
                       <td>${escapeHtml(r.dept)}</td>
                       <td>${escapeHtml(r.section)}</td>
+                      <td><span style="font-family: var(--font-mono); font-size: 0.8rem;">${r.phone ? escapeHtml(r.phone) : '<span style="color: var(--text-muted);">-</span>'}</span></td>
                       <td><span class="badge-${r.registered ? 'ongoing' : 'delayed'}">${r.registered ? 'Activated' : 'Unregistered'}</span></td>
                       <td>
                         ${!r.registered ? `
@@ -2351,6 +2357,306 @@
     }
   }
 
+  let activeMobileDay = 1;
+  let timetableAutoRefreshTimer = null;
+  let cachedWeeklyData = null;
+
+  function evaluateSlotStatus(slot, dateStr, now) {
+    if (!slot) return null;
+    const sDate = dateStr || slot.date_str;
+    const startTime = new Date(`${sDate}T${slot.s}:00`);
+    const endTime = new Date(`${sDate}T${slot.e}:00`);
+
+    if (slot.st === 'cancelled') {
+      return {
+        type: 'cancelled',
+        label: 'Cancelled',
+        cssClass: 'status-cancelled',
+        badgeCss: 'tt-badge-cancelled',
+        isGreen: false,
+        icon: '❌'
+      };
+    }
+
+    if (slot.st === 'absent') {
+      return {
+        type: 'absent',
+        label: slot.note ? `Absent (${slot.note})` : 'Faculty Absent',
+        cssClass: 'status-absent',
+        badgeCss: 'tt-badge-cancelled',
+        isGreen: false,
+        icon: '🚫'
+      };
+    }
+
+    if (slot.st === 'delayed') {
+      return {
+        type: 'delayed',
+        label: slot.note ? `Delayed (${slot.note})` : 'Faculty Delayed',
+        cssClass: 'status-delayed',
+        badgeCss: 'badge-delayed',
+        isGreen: false,
+        icon: '⏳'
+      };
+    }
+
+    if (slot.st === 'sub') {
+      return {
+        type: 'sub',
+        label: slot.note ? `Sub: ${slot.note}` : 'Substitute Assigned',
+        cssClass: 'status-sub',
+        badgeCss: 'badge-sub',
+        isGreen: false,
+        icon: '🔄'
+      };
+    }
+
+    if (now >= endTime) {
+      return {
+        type: 'completed',
+        label: '✓ Completed',
+        cssClass: 'status-completed',
+        badgeCss: 'tt-badge-completed',
+        isGreen: true,
+        icon: '✓'
+      };
+    }
+
+    if (now >= startTime && now < endTime) {
+      return {
+        type: 'live',
+        label: '● Live Now',
+        cssClass: 'status-live',
+        badgeCss: 'tt-badge-live',
+        isGreen: false,
+        icon: '⚡'
+      };
+    }
+
+    return {
+      type: 'upcoming',
+      label: '',
+      cssClass: 'status-upcoming',
+      badgeCss: 'tt-badge-upcoming',
+      isGreen: false,
+      icon: ''
+    };
+  }
+
+  async function renderTimetableCalendarView() {
+    const container = document.getElementById('mainContainer');
+    container.innerHTML = `<div class="loading-spinner-view"><div class="spinner"></div><p>Loading Weekly Timetable...</p></div>`;
+
+    try {
+      const data = await fetchApi('/api/timetable/weekly');
+      cachedWeeklyData = data;
+
+      if (timetableAutoRefreshTimer) {
+        clearInterval(timetableAutoRefreshTimer);
+      }
+
+      timetableAutoRefreshTimer = setInterval(() => {
+        const currentHash = (window.location.hash || '').slice(1);
+        if (currentHash === 'timetable' && cachedWeeklyData) {
+          renderWeeklyCalendarContent(cachedWeeklyData);
+        } else {
+          clearInterval(timetableAutoRefreshTimer);
+          timetableAutoRefreshTimer = null;
+        }
+      }, 60000);
+
+      renderWeeklyCalendarContent(data);
+    } catch (err) {
+      renderErrorState(container, 'Failed to load timetable', err.message);
+    }
+  }
+
+  function renderWeeklyCalendarContent(data) {
+    cachedWeeklyData = data;
+    const container = document.getElementById('mainContainer');
+    const now = new Date(data.effectiveNow);
+    const jsDay = now.getDay();
+    const todayDayNum = (jsDay >= 1 && jsDay <= 6) ? jsDay : 1;
+
+    if (!activeMobileDay) {
+      activeMobileDay = todayDayNum;
+    }
+
+    const DAY_NAMES = { 1: 'Monday', 2: 'Tuesday', 3: 'Wednesday', 4: 'Thursday', 5: 'Friday', 6: 'Saturday' };
+    const DAY_SHORT = { 1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri', 6: 'Sat' };
+
+    const periods = [
+      { s: '09:00', e: '09:50', label: '09:00 - 09:50' },
+      { s: '09:50', e: '10:40', label: '09:50 - 10:40' },
+      { s: '10:55', e: '11:45', label: '10:55 - 11:45' },
+      { s: '11:45', e: '12:35', label: '11:45 - 12:35' },
+      { isLunch: true, label: '12:35 - 13:30 (Lunch Break)' },
+      { s: '13:30', e: '14:20', label: '13:30 - 14:20' },
+      { s: '14:20', e: '15:10', label: '14:20 - 15:10' }
+    ];
+
+    const isAdmin = currentUser && currentUser.role === 'ADMIN';
+    const isDemoMode = window.ClassPulseConfig && window.ClassPulseConfig.demo;
+    let demoClockHtml = '';
+
+    if (isAdmin && (isDemoMode || data.simulatedTime)) {
+      demoClockHtml = `
+        <div class="card mb-3" style="border: 1px solid var(--primary); background: var(--bg-input); padding: 12px 16px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+            <div>
+              <div style="font-size: 0.95rem; font-weight: 800; display: flex; align-items: center; gap: 6px;">
+                <span>⏱️ Admin Demo Clock</span>
+                ${data.simulatedTime ? '<span class="tt-slot-badge tt-badge-live">Active</span>' : '<span style="font-size: 0.72rem; color: var(--text-muted); font-weight: 500;">(Real Time)</span>'}
+              </div>
+              <div style="font-size: 0.78rem; color: var(--text-muted);">
+                Effective Clock: <strong style="color: var(--primary);">${now.toLocaleString()}</strong>
+              </div>
+            </div>
+            <form style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;" onsubmit="window.ClassPulse.setSimulatedTime(event)">
+              <select id="simDaySelect" class="form-select" style="width: auto; padding: 6px 10px; font-size: 0.8rem;">
+                <option value="1" ${todayDayNum === 1 ? 'selected' : ''}>Monday</option>
+                <option value="2" ${todayDayNum === 2 ? 'selected' : ''}>Tuesday</option>
+                <option value="3" ${todayDayNum === 3 ? 'selected' : ''}>Wednesday</option>
+                <option value="4" ${todayDayNum === 4 ? 'selected' : ''}>Thursday</option>
+                <option value="5" ${todayDayNum === 5 ? 'selected' : ''}>Friday</option>
+                <option value="6" ${todayDayNum === 6 ? 'selected' : ''}>Saturday</option>
+              </select>
+              <input type="time" id="simTimeInput" class="form-input" style="width: 105px; padding: 6px 8px; font-size: 0.8rem;" value="${now.toTimeString().slice(0, 5)}" required>
+              <button type="submit" class="btn btn-sm btn-primary">Set Time</button>
+              ${data.simulatedTime ? '<button type="button" class="btn btn-sm btn-outline-danger" onclick="window.ClassPulse.clearSimulatedTime()">Reset Clock</button>' : ''}
+            </form>
+          </div>
+        </div>
+      `;
+    }
+
+    let tableHeaderThs = '<th style="width: 110px;">Period</th>';
+    for (let d = 1; d <= 6; d++) {
+      const isToday = (todayDayNum === d && jsDay !== 0);
+      const dateStr = (data.weekDates && data.weekDates[d]) ? data.weekDates[d].slice(5) : '';
+      tableHeaderThs += `<th class="${isToday ? 'col-today' : ''}">${DAY_SHORT[d]} ${dateStr ? `(${dateStr})` : ''}${isToday ? ' <span style="font-size: 0.68rem; display:block; color:#10b981;">● TODAY</span>' : ''}</th>`;
+    }
+
+    let tableRowsHtml = '';
+    periods.forEach(p => {
+      if (p.isLunch) {
+        tableRowsHtml += `
+          <tr style="background: rgba(255, 255, 255, 0.03);">
+            <td class="tt-time-cell" style="font-weight: 700; color: var(--text-dim); text-align: center;" colspan="7">
+              🍱 ${p.label}
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      let rowTds = `<td class="tt-time-cell">${p.label}</td>`;
+      for (let d = 1; d <= 6; d++) {
+        const slot = data.classes.find(c => c.day === d && c.s === p.s && c.e === p.e);
+        if (!slot) {
+          rowTds += `<td class="tt-cell"><div style="color: var(--text-faint); text-align: center; font-size: 0.72rem; padding: 18px 0;">— Free —</div></td>`;
+        } else {
+          const evalRes = evaluateSlotStatus(slot, data.weekDates[d], now);
+          rowTds += `
+            <td class="tt-cell">
+              <div class="tt-slot-card ${evalRes.cssClass}">
+                <div>
+                  <div class="tt-slot-sub">${slot.sub}</div>
+                  <div class="tt-slot-meta">
+                    <span>👨‍🏫 ${slot.fac}</span>
+                    <span>📍 ${slot.room}</span>
+                  </div>
+                </div>
+                ${evalRes.label ? `<div><span class="tt-slot-badge ${evalRes.badgeCss}">${evalRes.label}</span></div>` : ''}
+              </div>
+            </td>
+          `;
+        }
+      }
+      tableRowsHtml += `<tr>${rowTds}</tr>`;
+    });
+
+    let mobileDayBtns = '';
+    for (let d = 1; d <= 6; d++) {
+      const isToday = (todayDayNum === d && jsDay !== 0);
+      mobileDayBtns += `
+        <button type="button" class="tt-mobile-day-btn ${activeMobileDay === d ? 'active' : ''}" onclick="window.ClassPulse.setMobileDay(${d})">
+          ${DAY_SHORT[d]} ${isToday ? '●' : ''}
+        </button>
+      `;
+    }
+
+    const daySlots = data.classes.filter(c => c.day === activeMobileDay).sort((a, b) => a.s.localeCompare(b.s));
+    let mobileSlotsHtml = '';
+    if (daySlots.length === 0) {
+      mobileSlotsHtml = `<div class="card text-center" style="padding: 24px;"><p style="color: var(--text-muted);">No classes scheduled for ${DAY_NAMES[activeMobileDay]}.</p></div>`;
+    } else {
+      mobileSlotsHtml = daySlots.map(slot => {
+        const evalRes = evaluateSlotStatus(slot, data.weekDates[activeMobileDay], now);
+        return `
+          <div class="card mb-2 ${evalRes.cssClass}" style="padding: 12px 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px;">
+              <strong style="font-size: 0.92rem;">${slot.sub}</strong>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: var(--text-muted);">${slot.s} - ${slot.e}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 6px;">
+              <span>👨‍🏫 ${slot.fac}</span>
+              <span>📍 Room ${slot.room}</span>
+            </div>
+            ${evalRes.label ? `<div><span class="tt-slot-badge ${evalRes.badgeCss}">${evalRes.label}</span></div>` : ''}
+          </div>
+        `;
+      }).join('');
+    }
+
+    container.innerHTML = `
+      <div class="view-header" style="margin-bottom: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+          <div>
+            <h1 class="view-title">📅 Weekly Academic Timetable</h1>
+            <p class="view-subtitle">${currentUser.role === 'FACULTY' ? 'Your Assigned Teaching Schedule' : 'CSE-A Class Schedule (Mon to Sat)'}</p>
+          </div>
+          <button class="btn btn-sm btn-secondary" onclick="window.ClassPulse.refreshTimetable()">🔄 Refresh</button>
+        </div>
+      </div>
+
+      ${demoClockHtml}
+
+      <!-- Small Legend -->
+      <div class="tt-legend-bar">
+        <span class="tt-legend-item"><span class="tt-badge-completed">✓ Completed</span> Finished</span>
+        <span class="tt-legend-item"><span class="tt-badge-live">● Live Now</span> In Session</span>
+        <span class="tt-legend-item"><span class="tt-badge-upcoming">Upcoming</span> Future</span>
+        <span class="tt-legend-item"><span class="tt-badge-cancelled">Cancelled / Absent</span> Cancelled / Absent</span>
+      </div>
+
+      <!-- Mobile Day Selector -->
+      <div class="tt-mobile-nav">
+        ${mobileDayBtns}
+      </div>
+
+      <!-- Mobile Day Cards View -->
+      <div class="tt-mobile-cards-view d-md-none">
+        <h4 style="font-size: 0.9rem; font-weight: 700; margin-bottom: 10px; color: var(--text-muted);">
+          ${DAY_NAMES[activeMobileDay]} ${data.weekDates && data.weekDates[activeMobileDay] ? '(' + data.weekDates[activeMobileDay] + ')' : ''}
+        </h4>
+        ${mobileSlotsHtml}
+      </div>
+
+      <!-- Desktop Calendar Table -->
+      <div class="tt-calendar-wrapper tt-table-desktop">
+        <table class="tt-table-desktop">
+          <thead>
+            <tr>${tableHeaderThs}</tr>
+          </thead>
+          <tbody>
+            ${tableRowsHtml}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
   // --- Router ---
   async function router() {
     const hash = window.location.hash || '#';
@@ -2373,27 +2679,44 @@
       document.getElementById('forcePassModal').classList.remove('hidden');
     }
 
-    // Update active navbar highlight
+    // Update active navbar highlight and topbar title
     document.querySelectorAll('.nav-menu-item').forEach(el => el.classList.remove('active'));
+    let currentTitle = 'Live Classes & Directives';
     if (path.startsWith('events') || path.startsWith('event/')) {
       const link = document.getElementById('navLinkEvents');
       if (link) link.classList.add('active');
+      currentTitle = 'Campus Events & Trending';
+    } else if (path === 'timetable') {
+      const link = document.getElementById('navLinkTimetable');
+      if (link) link.classList.add('active');
+      currentTitle = 'Weekly Schedule Timetable';
     } else if (path === 'my-events') {
       const link = document.getElementById('navLinkMyEvents');
       if (link) link.classList.add('active');
+      currentTitle = 'My Event Passes';
     } else if (path === 'classroom' || path.startsWith('course/')) {
       const link = document.getElementById('navLinkClassroom');
       if (link) link.classList.add('active');
+      currentTitle = 'Classroom & Course Modules';
     } else if (path === 'admin') {
       const link = document.getElementById('navLinkAdmin');
       if (link) link.classList.add('active');
+      currentTitle = 'Administrative Control Panel';
+    } else if (path === 'chat' || path.startsWith('chat?')) {
+      const link = document.getElementById('navLinkChat');
+      if (link) link.classList.add('active');
+      currentTitle = 'Course Discussions & Messages';
     } else if (path === 'impact' || path === 'admin/impact') {
       const link = document.getElementById('navLinkImpact');
       if (link) link.classList.add('active');
+      currentTitle = 'Campus Impact Analytics';
     } else {
       const link = document.getElementById('navLinkHome');
       if (link) link.classList.add('active');
+      currentTitle = 'Live Classes & Directives';
     }
+    const pageTitleEl = document.getElementById('topBarPageTitle');
+    if (pageTitleEl) pageTitleEl.textContent = currentTitle;
 
     if (path === 'login') {
       renderLoginView();
@@ -2407,6 +2730,20 @@
 
     if (!currentUser) {
       window.location.hash = '#login';
+      return;
+    }
+
+    if (path === 'timetable') {
+      renderTimetableCalendarView();
+      return;
+    }
+
+    if (path === 'chat' || path.startsWith('chat?') || path.startsWith('chat/')) {
+      if (currentUser.role === 'ADMIN') {
+        window.location.hash = '#admin';
+        return;
+      }
+      renderChatView();
       return;
     }
 
@@ -2503,6 +2840,7 @@
     const myEventsLink = document.getElementById('navLinkMyEvents');
     const adminLink = document.getElementById('navLinkAdmin');
     const impactLink = document.getElementById('navLinkImpact');
+    const chatLink = document.getElementById('navLinkChat');
 
     if (currentUser) {
       if (socket && socket.connected) {
@@ -2512,7 +2850,21 @@
       authLinks.classList.add('hidden');
       roleTag.textContent = currentUser.role;
       nameTag.textContent = currentUser.name;
+      const userBadge = document.getElementById('navUserBadge');
+      if (userBadge) {
+        userBadge.style.cursor = 'pointer';
+        userBadge.title = 'Click to view your profile';
+        userBadge.onclick = () => window.ClassPulse.openUserProfileModal();
+      }
       if (myEventsLink) myEventsLink.classList.remove('hidden');
+      if (chatLink) {
+        if (currentUser.role !== 'ADMIN') {
+          chatLink.classList.remove('hidden');
+          updateChatNavBadge();
+        } else {
+          chatLink.classList.add('hidden');
+        }
+      }
       if (adminLink) {
         if (currentUser.role === 'ADMIN') {
           adminLink.classList.remove('hidden');
@@ -2527,6 +2879,7 @@
       userArea.classList.add('hidden');
       authLinks.classList.remove('hidden');
       if (myEventsLink) myEventsLink.classList.add('hidden');
+      if (chatLink) chatLink.classList.add('hidden');
       if (adminLink) adminLink.classList.add('hidden');
       if (impactLink) impactLink.classList.add('hidden');
       const badge = document.getElementById('notifBadge');
@@ -2535,7 +2888,7 @@
 
     const assistantWidget = document.getElementById('assistantWidget');
     if (assistantWidget) {
-      if (currentUser && currentUser.role === 'STUDENT') {
+      if (currentUser && (currentUser.role === 'STUDENT' || currentUser.role === 'FACULTY' || currentUser.role === 'ADMIN')) {
         assistantWidget.classList.remove('hidden');
       } else {
         assistantWidget.classList.add('hidden');
@@ -2608,6 +2961,17 @@
       const hash = window.location.hash || '#';
       if (currentUser && currentUser.role === 'STUDENT' && isHomePath(hash)) {
         renderStudentHome();
+      } else if (hash === '#timetable') {
+        fetchApi('/api/timetable/weekly').then(renderWeeklyCalendarContent).catch(() => {});
+      }
+    });
+
+    socket.on('simulated_time:updated', () => {
+      const hash = window.location.hash || '#';
+      if (hash === '#timetable') {
+        fetchApi('/api/timetable/weekly').then(renderWeeklyCalendarContent).catch(() => {});
+      } else if (currentUser && currentUser.role === 'STUDENT' && isHomePath(hash)) {
+        renderStudentHome();
       }
     });
 
@@ -2618,6 +2982,11 @@
         type: 'status'
       });
       AudioEngine.chime('status');
+
+      const hash = window.location.hash || '#';
+      if (hash === '#timetable') {
+        fetchApi('/api/timetable/weekly').then(renderWeeklyCalendarContent).catch(() => {});
+      }
 
       const targetCard = document.getElementById(`card-period-${evt.classId}`);
       if (targetCard) {
@@ -2734,12 +3103,1303 @@
       if (evt && evt.eventId && hash === `#event/${evt.eventId}`) renderEventDetailView(evt.eventId);
     });
 
-    socket.on('impact:updated', () => {
-      const hash = window.location.hash || '#';
-      if (hash === '#impact' || hash === '#admin/impact') {
-        renderImpactDashboard();
+    // WhatsApp-Style Chat Socket Events
+    socket.on('message:new', (msg) => {
+      onChatNewMessage(msg);
+    });
+
+    socket.on('message:deleted', (evt) => {
+      onChatMessageDeleted(evt);
+    });
+
+    socket.on('conversation:read', (evt) => {
+      onChatConversationRead(evt);
+    });
+
+    socket.on('conversation:updated', (evt) => {
+      onChatConversationUpdated(evt);
+    });
+
+    socket.on('typing:start', (evt) => {
+      onChatTypingStart(evt);
+    });
+
+    socket.on('typing:stop', (evt) => {
+      onChatTypingStop(evt);
+    });
+
+    socket.on('presence:update', (evt) => {
+      onChatPresenceUpdate(evt);
+    });
+  }
+
+  // ==========================================================================
+  // WHATSAPP-STYLE CHAT MODULE
+  // ==========================================================================
+  let activeChatId = null;
+  let activeChatData = null;
+  let activeChatMessages = [];
+  let activeChatHasMore = false;
+  let activeOtherLastReadTs = 0;
+  let chatConversationsCache = [];
+  let chatTypingTimeout = null;
+  let chatIsTypingSent = false;
+  let chatActiveFilter = 'all'; // 'all' | 'unread' | 'groups' | 'direct'
+  let chatSearchFilterQuery = '';
+  let activeOtherBlocked = false;
+
+  const CHAT_EMOJIS = [
+    '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣',
+    '😊', '😇', '🙂', '🙃', '😉', '😌', '😍', '🥰',
+    '😘', '😋', '😛', '😜', '🤪', '🤔', '🤫', '🤭',
+    '🤐', '🫡', '🤝', '👍', '👎', '👏', '🙌', '🎓',
+    '📚', '💡', '📝', '📅', '⏰', '⚡', '🔥', '✨'
+  ];
+
+  function getInitialsAvatar(name) {
+    if (!name) return 'U';
+    const clean = String(name).trim();
+    const parts = clean.split(/\s+/);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return clean.slice(0, 2).toUpperCase();
+  }
+
+  async function updateChatNavBadge() {
+    const badge = document.getElementById('chatNavBadge');
+    if (!badge) return;
+    if (!currentUser || currentUser.role === 'ADMIN') {
+      badge.classList.add('hidden');
+      badge.textContent = '0';
+      return;
+    }
+    try {
+      const data = await fetchApi('/api/chat/conversations');
+      chatConversationsCache = data.conversations || [];
+      const totalUnread = chatConversationsCache.reduce((sum, c) => sum + (c.unread_count || 0), 0);
+      if (totalUnread > 0) {
+        badge.textContent = totalUnread > 99 ? '99+' : totalUnread;
+        badge.classList.remove('hidden');
+      } else {
+        badge.classList.add('hidden');
+        badge.textContent = '0';
+      }
+    } catch (e) {}
+  }
+
+  function getChatDayDivider(ts) {
+    const d = new Date(ts);
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const target = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const diffDays = Math.round((today - target) / (24 * 60 * 60 * 1000));
+    if (diffDays === 0) return 'Today';
+    if (diffDays === 1) return 'Yesterday';
+    return d.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+
+  function formatChatBubbleTime(ts) {
+    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function onChatNewMessage(msg) {
+    if (!currentUser || currentUser.role === 'ADMIN') return;
+
+    if (activeChatId && activeChatId === msg.conversation_id) {
+      activeChatMessages.push(msg);
+      appendMessageBubbleToChat(msg);
+      scrollChatToBottom();
+      if (msg.sender_uid !== currentUser.uid) {
+        fetchApi(`/api/chat/${activeChatId}/read`, { method: 'POST' }).catch(() => {});
+      }
+    } else {
+      if (msg.sender_uid !== currentUser.uid) {
+        AudioEngine.chime('status');
+      }
+    }
+
+    updateConversationsCacheWithNewMessage(msg);
+  }
+
+  function updateConversationsCacheWithNewMessage(msg) {
+    let conv = chatConversationsCache.find(c => c.id === msg.conversation_id);
+    if (conv) {
+      conv.last_message = {
+        id: msg.id,
+        sender_uid: msg.sender_uid,
+        sender_name: msg.sender_name,
+        text: msg.text,
+        ts: msg.ts,
+        deleted: 0
+      };
+      conv.last_activity = msg.ts;
+      if (activeChatId !== msg.conversation_id && msg.sender_uid !== currentUser.uid) {
+        conv.unread_count = (conv.unread_count || 0) + 1;
+      }
+    } else {
+      loadAndRenderConversations();
+      return;
+    }
+
+    chatConversationsCache.sort((a, b) => (b.last_activity || 0) - (a.last_activity || 0));
+
+    const badge = document.getElementById('chatNavBadge');
+    if (badge) {
+      const totalUnread = chatConversationsCache.reduce((sum, c) => sum + (c.unread_count || 0), 0);
+      if (totalUnread > 0) {
+        badge.textContent = totalUnread > 99 ? '99+' : totalUnread;
+        badge.classList.remove('hidden');
+      } else {
+        badge.classList.add('hidden');
+        badge.textContent = '0';
+      }
+    }
+
+    renderConversationsListSidebar();
+  }
+
+  function onChatMessageDeleted(evt) {
+    if (activeChatId && activeChatId === evt.conversation_id) {
+      const bubble = document.querySelector(`.chat-msg-row[data-msg-id="${evt.id}"]`);
+      if (bubble) {
+        const textEl = bubble.querySelector('.chat-bubble-text');
+        if (textEl) textEl.textContent = 'This message was deleted';
+        const b = bubble.querySelector('.chat-bubble');
+        if (b) b.classList.add('deleted');
+        const actions = bubble.querySelector('.chat-msg-actions');
+        if (actions) actions.remove();
+      }
+      const m = activeChatMessages.find(x => x.id === evt.id);
+      if (m) {
+        m.deleted = 1;
+        m.text = 'This message was deleted';
+      }
+    }
+
+    const conv = chatConversationsCache.find(c => c.id === evt.conversation_id);
+    if (conv && conv.last_message && conv.last_message.id === evt.id) {
+      conv.last_message.deleted = 1;
+      conv.last_message.text = 'This message was deleted';
+      renderConversationsListSidebar();
+    }
+  }
+
+  function onChatConversationRead(evt) {
+    if (activeChatId && activeChatId === evt.conversation_id && currentUser && evt.uid !== currentUser.uid) {
+      activeOtherLastReadTs = evt.last_read_ts;
+      document.querySelectorAll('.chat-msg-row.mine').forEach(row => {
+        const ts = parseInt(row.getAttribute('data-msg-ts'), 10);
+        if (ts && ts <= evt.last_read_ts) {
+          const tickEl = row.querySelector('.chat-ticks');
+          if (tickEl) {
+            tickEl.textContent = '✓✓';
+            tickEl.classList.add('read');
+          }
+        }
+      });
+    }
+  }
+
+  function onChatConversationUpdated(evt) {
+    const conv = chatConversationsCache.find(c => c.id === evt.id);
+    if (conv) {
+      conv.announce_only = evt.announce_only;
+    }
+    if (activeChatId && activeChatId === evt.id && activeChatData) {
+      activeChatData.announce_only = evt.announce_only;
+      updateChatBottomBarState();
+      updateChatHeaderState();
+    }
+  }
+
+  function onChatTypingStart(evt) {
+    if (activeChatId && activeChatId === evt.conversationId && currentUser && evt.uid !== currentUser.uid) {
+      const typingEl = document.getElementById('chatTypingIndicator');
+      if (typingEl) {
+        typingEl.textContent = `💬 ${evt.name || 'Someone'} is typing...`;
+        typingEl.classList.remove('hidden');
+      }
+    }
+  }
+
+  function onChatTypingStop(evt) {
+    if (activeChatId && activeChatId === evt.conversationId && currentUser && evt.uid !== currentUser.uid) {
+      const typingEl = document.getElementById('chatTypingIndicator');
+      if (typingEl) {
+        typingEl.textContent = '';
+        typingEl.classList.add('hidden');
+      }
+    }
+  }
+
+  function onChatPresenceUpdate(evt) {
+    if (activeChatData && activeChatData.type === 'direct' && activeChatData.other_user && activeChatData.other_user.uid === evt.uid) {
+      const subEl = document.getElementById('chatHeaderSub');
+      if (subEl) {
+        if (evt.online) {
+          subEl.innerHTML = '<span class="chat-online-dot"></span> <span class="chat-presence-text online">Online</span>';
+        } else {
+          subEl.innerHTML = `<span class="chat-presence-text">Last seen ${formatRelativeTime(evt.last_seen || Date.now())}</span>`;
+        }
+      }
+    }
+  }
+
+  async function renderChatView() {
+    if (!currentUser || currentUser.role === 'ADMIN') {
+      window.location.hash = '#admin';
+      return;
+    }
+
+    const main = document.getElementById('mainContainer');
+    main.innerHTML = `
+      <div class="chat-app-container" id="chatAppContainer">
+        <!-- Sidebar: Conversation List & Actions -->
+        <aside class="chat-sidebar" id="chatSidebar">
+          <div class="chat-sidebar-header">
+            <div class="chat-sidebar-title-row">
+              <h2 class="chat-sidebar-title">💬 Chats</h2>
+              <div class="chat-header-menu-wrap">
+                <button id="chatNewMenuBtn" class="btn btn-sm btn-primary" title="New Chat Options">➕ New Chat ▾</button>
+                <div id="chatNewDropdown" class="chat-menu-dropdown hidden">
+                  <button id="chatSearchContactOption" class="chat-menu-item">
+                    <span>🔍 New Contact</span>
+                  </button>
+                  ${currentUser.role === 'FACULTY' ? `
+                    <button id="chatNewGroupOption" class="chat-menu-item">
+                      <span>👥 New Group</span>
+                    </button>
+                  ` : ''}
+                  <button id="chatRequestsOption" class="chat-menu-item">
+                    <span>📬 Requests</span>
+                    <span id="chatRequestsMenuBadge" class="chat-nav-badge hidden">0</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Filter tabs: All, Unread, Groups, Direct -->
+            <div class="chat-filter-bar">
+              <button class="chat-filter-btn active" data-filter="all">All</button>
+              <button class="chat-filter-btn" data-filter="unread">Unread</button>
+              <button class="chat-filter-btn" data-filter="groups">Groups</button>
+              <button class="chat-filter-btn" data-filter="direct">Direct</button>
+            </div>
+
+            <input type="text" id="chatSearchInput" class="chat-search-input" placeholder="Search chats by name..." />
+          </div>
+
+          <ul class="chat-conversations-list" id="chatConversationsList">
+            <li style="padding: 24px; text-align: center; color: var(--text-muted);"><div class="spinner"></div></li>
+          </ul>
+        </aside>
+
+        <!-- Main Chat Pane -->
+        <section class="chat-main" id="chatMainPane">
+          <div class="chat-empty-state" id="chatEmptyState">
+            <div class="chat-empty-icon">💬</div>
+            <h3 style="margin: 0; font-size: 1.2rem; font-weight: 800;">ClassPulse Chat</h3>
+            <p style="margin: 0; max-width: 380px;">Select a course group or direct conversation on the left to start messaging in real time.</p>
+          </div>
+
+          <div id="chatActiveContent" class="hidden" style="display: flex; flex-direction: column; height: 100%;">
+            <!-- Header -->
+            <div class="chat-pane-header" id="chatPaneHeader">
+              <div class="chat-pane-header-left">
+                <button id="chatBackBtn" class="chat-back-btn" title="Back to chats">←</button>
+                <div class="chat-avatar" id="chatHeaderAvatar">C</div>
+                <div class="chat-header-info">
+                  <div class="chat-header-title" id="chatHeaderTitle">Conversation</div>
+                  <div class="chat-header-sub" id="chatHeaderSub"></div>
+                </div>
+              </div>
+              <div class="chat-header-actions" id="chatHeaderActions" style="display: flex; gap: 6px; align-items: center;"></div>
+            </div>
+
+            <!-- Messages Area -->
+            <div class="chat-messages-area" id="chatMessagesArea"></div>
+
+            <!-- Typing indicator -->
+            <div id="chatTypingIndicator" class="chat-typing-row hidden"></div>
+
+            <!-- Bottom bar -->
+            <div class="chat-bottom-bar" id="chatBottomBar"></div>
+          </div>
+        </section>
+      </div>
+    `;
+
+    // Dropdown toggle
+    const menuBtn = document.getElementById('chatNewMenuBtn');
+    const dropdown = document.getElementById('chatNewDropdown');
+    menuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dropdown.classList.toggle('hidden');
+    });
+    document.addEventListener('click', () => {
+      if (dropdown) dropdown.classList.add('hidden');
+    });
+
+    document.getElementById('chatSearchContactOption').addEventListener('click', () => {
+      dropdown.classList.add('hidden');
+      openContactSearchModal();
+    });
+
+    const newGroupOpt = document.getElementById('chatNewGroupOption');
+    if (newGroupOpt) {
+      newGroupOpt.addEventListener('click', () => {
+        dropdown.classList.add('hidden');
+        openFacultyNewGroupModal();
+      });
+    }
+
+    document.getElementById('chatRequestsOption').addEventListener('click', () => {
+      dropdown.classList.add('hidden');
+      openChatRequestsModal();
+    });
+
+    document.getElementById('chatBackBtn').addEventListener('click', () => {
+      const appContainer = document.getElementById('chatAppContainer');
+      if (appContainer) appContainer.classList.remove('chat-active-mobile');
+    });
+
+    // Filter tabs
+    const filterBtns = document.querySelectorAll('.chat-filter-btn');
+    filterBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        filterBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        chatActiveFilter = btn.getAttribute('data-filter') || 'all';
+        renderConversationsListSidebar();
+      });
+    });
+
+    const searchInput = document.getElementById('chatSearchInput');
+    searchInput.addEventListener('input', (e) => {
+      chatSearchFilterQuery = e.target.value.trim().toLowerCase();
+      renderConversationsListSidebar();
+    });
+
+    await loadAndRenderConversations();
+    updatePendingRequestsBadge();
+
+    // Check query param for target conversation
+    const hash = window.location.hash || '';
+    const match = hash.match(/[?&]id=(\d+)/);
+    if (match && match[1]) {
+      const convId = parseInt(match[1], 10);
+      openChatConversation(convId);
+    } else if (chatConversationsCache.length > 0 && window.innerWidth > 768) {
+      openChatConversation(chatConversationsCache[0].id);
+    }
+  }
+
+  async function updatePendingRequestsBadge() {
+    try {
+      const data = await fetchApi('/api/chat/requests');
+      const incoming = (data.incoming || []).length;
+      const badge = document.getElementById('chatRequestsMenuBadge');
+      if (badge) {
+        if (incoming > 0) {
+          badge.textContent = String(incoming);
+          badge.classList.remove('hidden');
+        } else {
+          badge.classList.add('hidden');
+        }
+      }
+    } catch (e) {}
+  }
+
+  async function loadAndRenderConversations() {
+    try {
+      const res = await fetchApi('/api/chat/conversations');
+      chatConversationsCache = res.conversations || [];
+      renderConversationsListSidebar();
+      updateChatNavBadge();
+    } catch (err) {
+      const list = document.getElementById('chatConversationsList');
+      if (list) list.innerHTML = `<li style="padding: 20px; color: #ef4444; font-size: 0.85rem;">Failed to load conversations: ${escapeHtml(err.message)}</li>`;
+    }
+  }
+
+  function renderConversationsListSidebar() {
+    const list = document.getElementById('chatConversationsList');
+    if (!list) return;
+
+    let items = chatConversationsCache;
+
+    // Apply category filter
+    if (chatActiveFilter === 'unread') {
+      items = items.filter(c => c.unread_count > 0);
+    } else if (chatActiveFilter === 'groups') {
+      items = items.filter(c => c.type === 'group');
+    } else if (chatActiveFilter === 'direct') {
+      items = items.filter(c => c.type === 'direct');
+    }
+
+    // Apply search query
+    if (chatSearchFilterQuery) {
+      items = items.filter(c => {
+        const nameMatch = (c.name || '').toLowerCase().includes(chatSearchFilterQuery);
+        const lastMsgMatch = c.last_message && (c.last_message.text || '').toLowerCase().includes(chatSearchFilterQuery);
+        return nameMatch || lastMsgMatch;
+      });
+    }
+
+    if (items.length === 0) {
+      list.innerHTML = `<li style="padding: 24px; text-align: center; color: var(--text-muted); font-size: 0.85rem;">No conversations found</li>`;
+      return;
+    }
+
+    list.innerHTML = items.map(c => {
+      const isGroup = c.type === 'group';
+      const initials = isGroup ? (c.course_id ? c.course_id.slice(0, 2) : 'GP') : getInitialsAvatar(c.name);
+      const isActive = activeChatId === c.id;
+      let lastText = 'No messages yet';
+      let lastTime = '';
+      if (c.last_message) {
+        lastText = c.last_message.deleted ? '🚫 This message was deleted' : escapeHtml(c.last_message.text);
+        lastTime = formatChatBubbleTime(c.last_message.ts);
+      }
+      const unreadBadge = (c.unread_count && c.unread_count > 0 && !isActive)
+        ? `<span class="chat-conv-badge">${c.unread_count > 99 ? '99+' : c.unread_count}</span>`
+        : '';
+
+      return `
+        <li class="chat-conv-item ${isActive ? 'active' : ''}" data-conv-id="${c.id}">
+          <div class="chat-avatar ${isGroup ? 'group-avatar' : ''}">
+            ${escapeHtml(initials)}
+          </div>
+          <div class="chat-conv-content">
+            <div class="chat-conv-top">
+              <span class="chat-conv-name">${escapeHtml(c.name)}</span>
+              <span class="chat-conv-time">${lastTime}</span>
+            </div>
+            <div class="chat-conv-bottom">
+              <span class="chat-conv-snippet">${lastText}</span>
+              ${unreadBadge}
+            </div>
+          </div>
+        </li>
+      `;
+    }).join('');
+
+    list.querySelectorAll('.chat-conv-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const id = parseInt(el.getAttribute('data-conv-id'), 10);
+        openChatConversation(id);
+      });
+    });
+  }
+
+  async function openChatConversation(convId) {
+    activeChatId = convId;
+    const appContainer = document.getElementById('chatAppContainer');
+    if (appContainer) appContainer.classList.add('chat-active-mobile');
+
+    renderConversationsListSidebar();
+
+    const emptyState = document.getElementById('chatEmptyState');
+    const activeContent = document.getElementById('chatActiveContent');
+    if (emptyState) emptyState.classList.add('hidden');
+    if (activeContent) activeContent.classList.remove('hidden');
+
+    if (socket && socket.connected) {
+      socket.emit('chat:join', { conversationId: convId });
+    }
+
+    const messagesArea = document.getElementById('chatMessagesArea');
+    if (messagesArea) messagesArea.innerHTML = '<div style="padding: 30px; text-align: center;"><div class="spinner"></div></div>';
+
+    try {
+      const data = await fetchApi(`/api/chat/${convId}/messages?limit=30`);
+      activeChatData = data.conversation;
+      activeChatMessages = data.messages || [];
+      activeChatHasMore = Boolean(data.has_more);
+      activeOtherLastReadTs = data.other_last_read_ts || 0;
+
+      // Update header
+      const titleEl = document.getElementById('chatHeaderTitle');
+      const avatarEl = document.getElementById('chatHeaderAvatar');
+      const subEl = document.getElementById('chatHeaderSub');
+
+      const isGroup = activeChatData.type === 'group';
+      let titleName = activeChatData.name || 'Chat';
+      let otherMemberUid = null;
+
+      if (!isGroup) {
+        const otherMember = (chatConversationsCache.find(x => x.id === convId) || {}).other_user;
+        if (otherMember) {
+          titleName = otherMember.name;
+          otherMemberUid = otherMember.uid;
+        }
+      }
+
+      if (titleEl) titleEl.textContent = titleName;
+      if (avatarEl) {
+        avatarEl.className = `chat-avatar ${isGroup ? 'group-avatar' : ''}`;
+        avatarEl.textContent = isGroup ? (activeChatData.course_id ? activeChatData.course_id.slice(0, 2) : 'GP') : getInitialsAvatar(titleName);
+      }
+
+      if (isGroup) {
+        const memCount = activeChatData.member_count || 1;
+        if (subEl) {
+          subEl.innerHTML = activeChatData.announce_only
+            ? `<span>👥 ${memCount} members • <span style="color: #f59e0b; font-weight: 600;">📢 Announcements Only</span></span>`
+            : `<span>👥 ${memCount} members</span>`;
+        }
+      } else {
+        if (subEl) subEl.innerHTML = '<span class="chat-presence-text">Connecting...</span>';
+        fetchApi(`/api/chat/${convId}/presence`).then(p => {
+          if (activeChatId === convId && subEl) {
+            if (p.online) {
+              subEl.innerHTML = '<span class="chat-online-dot"></span> <span class="chat-presence-text online">Online</span>';
+            } else if (p.last_seen) {
+              subEl.innerHTML = `<span class="chat-presence-text">Last seen ${formatRelativeTime(p.last_seen)}</span>`;
+            } else {
+              subEl.innerHTML = '<span class="chat-presence-text">Offline</span>';
+            }
+          }
+        }).catch(() => {});
+      }
+
+      // Check if target user is blocked
+      activeOtherBlocked = false;
+      if (!isGroup && otherMemberUid) {
+        try {
+          const bData = await fetchApi('/api/chat/blocked');
+          const isBlocked = (bData.blocked || []).some(x => x.uid === otherMemberUid);
+          activeOtherBlocked = isBlocked;
+        } catch (e) {}
+      }
+
+      updateChatHeaderState(otherMemberUid);
+      updateChatBottomBarState();
+      renderChatMessagesList(activeChatMessages, false);
+      scrollChatToBottom();
+
+      // Clear unread on server and in cache
+      fetchApi(`/api/chat/${convId}/read`, { method: 'POST' }).catch(() => {});
+      const cached = chatConversationsCache.find(c => c.id === convId);
+      if (cached) cached.unread_count = 0;
+      updateChatNavBadge();
+      renderConversationsListSidebar();
+
+    } catch (err) {
+      if (messagesArea) messagesArea.innerHTML = `<div class="error-box">${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function updateChatHeaderState(otherUid = null) {
+    const actionsEl = document.getElementById('chatHeaderActions');
+    if (!actionsEl || !activeChatData) return;
+    actionsEl.innerHTML = '';
+
+    if (activeChatData.type === 'group' && currentUser && currentUser.role === 'FACULTY') {
+      const isAnnounce = activeChatData.announce_only === 1;
+      const btn = document.createElement('button');
+      btn.className = `btn btn-sm ${isAnnounce ? 'btn-warning' : 'btn-secondary'}`;
+      btn.innerHTML = isAnnounce ? '📢 Announcements Only: ON' : '💬 All Can Post';
+      btn.title = isAnnounce ? 'Click to allow students to post' : 'Click to restrict posting to faculty only';
+      btn.onclick = () => toggleGroupAnnounceOnly(!isAnnounce);
+      actionsEl.appendChild(btn);
+    }
+
+    if (activeChatData.type === 'direct' && otherUid) {
+      const blockBtn = document.createElement('button');
+      blockBtn.className = `btn btn-sm ${activeOtherBlocked ? 'btn-success' : 'btn-outline-danger'}`;
+      blockBtn.textContent = activeOtherBlocked ? '✅ Unblock User' : '🚫 Block User';
+      blockBtn.onclick = () => toggleBlockUser(otherUid);
+      actionsEl.appendChild(blockBtn);
+    }
+  }
+
+  async function toggleBlockUser(otherUid) {
+    try {
+      if (activeOtherBlocked) {
+        await fetchApi('/api/chat/unblock', { method: 'POST', body: JSON.stringify({ uid: otherUid }) });
+        activeOtherBlocked = false;
+        showToast({ title: 'Unblocked', message: 'User unblocked successfully', type: 'info' });
+      } else {
+        if (!confirm('Are you sure you want to block this user? Blocked users cannot message or send requests to you.')) return;
+        await fetchApi('/api/chat/block', { method: 'POST', body: JSON.stringify({ uid: otherUid }) });
+        activeOtherBlocked = true;
+        showToast({ title: 'Blocked', message: 'User blocked successfully', type: 'urgent' });
+      }
+      updateChatHeaderState(otherUid);
+    } catch (err) {
+      showToast({ title: 'Error', message: err.message, type: 'urgent' });
+    }
+  }
+
+  function updateChatBottomBarState() {
+    const bottomBar = document.getElementById('chatBottomBar');
+    if (!bottomBar || !activeChatData) return;
+
+    const isStudent = currentUser && currentUser.role === 'STUDENT';
+    const isAnnounceOnly = activeChatData.type === 'group' && activeChatData.announce_only === 1;
+
+    if (isStudent && isAnnounceOnly) {
+      bottomBar.innerHTML = `
+        <div class="chat-announce-notice-box">
+          <span>📢</span>
+          <span>Announcements Only: Only faculty can post messages in this course group.</span>
+        </div>
+      `;
+    } else {
+      bottomBar.innerHTML = `
+        <div class="chat-emoji-wrap">
+          <button id="chatEmojiBtn" class="chat-emoji-btn" title="Add emoji" type="button">😊</button>
+          <div id="chatEmojiPopover" class="chat-emoji-popover hidden">
+            <div class="chat-emoji-grid">
+              ${CHAT_EMOJIS.map(e => `<button type="button" class="chat-emoji-item" data-emoji="${e}">${e}</button>`).join('')}
+            </div>
+          </div>
+        </div>
+        <textarea id="chatTextInput" class="chat-input-field" placeholder="Type a message... (Enter to send, Shift+Enter for new line)" rows="1"></textarea>
+        <button id="chatSendBtn" class="chat-send-btn" title="Send message" aria-label="Send message">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+          </svg>
+        </button>
+      `;
+      setupChatInputEvents();
+    }
+  }
+
+  function setupChatInputEvents() {
+    const textarea = document.getElementById('chatTextInput');
+    const sendBtn = document.getElementById('chatSendBtn');
+    const emojiBtn = document.getElementById('chatEmojiBtn');
+    const emojiPopover = document.getElementById('chatEmojiPopover');
+    if (!textarea || !sendBtn) return;
+
+    if (emojiBtn && emojiPopover) {
+      emojiBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        emojiPopover.classList.toggle('hidden');
+      });
+
+      emojiPopover.querySelectorAll('.chat-emoji-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const emoji = item.getAttribute('data-emoji');
+          insertEmojiAtCursor(textarea, emoji);
+          emojiPopover.classList.add('hidden');
+          textarea.focus();
+        });
+      });
+
+      document.addEventListener('click', () => {
+        emojiPopover.classList.add('hidden');
+      });
+    }
+
+    sendBtn.addEventListener('click', sendChatMessage);
+
+    textarea.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendChatMessage();
       }
     });
+
+    textarea.addEventListener('input', () => {
+      textarea.style.height = 'auto';
+      textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+
+      if (activeChatId && socket && socket.connected) {
+        if (!chatIsTypingSent) {
+          socket.emit('typing:start', { conversationId: activeChatId });
+          chatIsTypingSent = true;
+        }
+        clearTimeout(chatTypingTimeout);
+        chatTypingTimeout = setTimeout(() => {
+          if (activeChatId && socket && socket.connected) {
+            socket.emit('typing:stop', { conversationId: activeChatId });
+          }
+          chatIsTypingSent = false;
+        }, 2500);
+      }
+    });
+  }
+
+  function insertEmojiAtCursor(textarea, emoji) {
+    const start = textarea.selectionStart || 0;
+    const end = textarea.selectionEnd || 0;
+    const val = textarea.value;
+    textarea.value = val.substring(0, start) + emoji + val.substring(end);
+    textarea.selectionStart = textarea.selectionEnd = start + emoji.length;
+  }
+
+  function renderChatMessagesList(messages, preserveScroll = false) {
+    const container = document.getElementById('chatMessagesArea');
+    if (!container) return;
+    container.innerHTML = '';
+
+    if (activeChatHasMore) {
+      const loadBtn = document.createElement('button');
+      loadBtn.id = 'chatLoadOlderBtn';
+      loadBtn.className = 'chat-load-older-btn';
+      loadBtn.textContent = '↑ Load older messages';
+      loadBtn.onclick = loadOlderChatMessages;
+      container.appendChild(loadBtn);
+    }
+
+    if (messages.length === 0) {
+      const emptyDiv = document.createElement('div');
+      emptyDiv.style.cssText = 'padding: 40px; text-align: center; color: var(--text-muted); font-size: 0.88rem;';
+      emptyDiv.textContent = 'No messages yet. Send a message to start the conversation!';
+      container.appendChild(emptyDiv);
+      return;
+    }
+
+    let lastDayText = null;
+    const isGroup = activeChatData && activeChatData.type === 'group';
+
+    messages.forEach(msg => {
+      const dayText = getChatDayDivider(msg.ts);
+      if (dayText !== lastDayText) {
+        const divider = document.createElement('div');
+        divider.className = 'chat-day-separator';
+        divider.textContent = dayText;
+        container.appendChild(divider);
+        lastDayText = dayText;
+      }
+
+      const bubbleEl = createMessageBubbleElement(msg, activeOtherLastReadTs, isGroup);
+      container.appendChild(bubbleEl);
+    });
+  }
+
+  function appendMessageBubbleToChat(msg) {
+    const container = document.getElementById('chatMessagesArea');
+    if (!container) return;
+
+    const lastRow = container.querySelector('.chat-msg-row:last-of-type');
+    let needDivider = false;
+    if (lastRow) {
+      const lastTs = parseInt(lastRow.getAttribute('data-msg-ts'), 10);
+      if (lastTs && getChatDayDivider(lastTs) !== getChatDayDivider(msg.ts)) {
+        needDivider = true;
+      }
+    } else {
+      needDivider = true;
+    }
+
+    if (needDivider) {
+      const divider = document.createElement('div');
+      divider.className = 'chat-day-separator';
+      divider.textContent = getChatDayDivider(msg.ts);
+      container.appendChild(divider);
+    }
+
+    const isGroup = activeChatData && activeChatData.type === 'group';
+    const bubbleEl = createMessageBubbleElement(msg, activeOtherLastReadTs, isGroup);
+    container.appendChild(bubbleEl);
+  }
+
+  function createMessageBubbleElement(msg, otherLastReadTs, isGroup) {
+    const isMine = currentUser && msg.sender_uid === currentUser.uid;
+    const row = document.createElement('div');
+    row.className = `chat-msg-row ${isMine ? 'mine' : 'other'}`;
+    row.setAttribute('data-msg-id', String(msg.id));
+    row.setAttribute('data-msg-ts', String(msg.ts));
+
+    const bubble = document.createElement('div');
+    bubble.className = `chat-bubble ${msg.deleted ? 'deleted' : ''}`;
+
+    if (isGroup && !isMine && msg.sender_name) {
+      const sender = document.createElement('div');
+      sender.className = 'chat-bubble-sender';
+      sender.textContent = msg.sender_name;
+      bubble.appendChild(sender);
+    }
+
+    const textDiv = document.createElement('div');
+    textDiv.className = 'chat-bubble-text';
+    textDiv.textContent = msg.deleted ? 'This message was deleted' : msg.text;
+    bubble.appendChild(textDiv);
+
+    const footer = document.createElement('div');
+    footer.className = 'chat-bubble-footer';
+
+    const timeSpan = document.createElement('span');
+    timeSpan.className = 'chat-time';
+    timeSpan.textContent = formatChatBubbleTime(msg.ts);
+    footer.appendChild(timeSpan);
+
+    if (!isGroup && isMine && !msg.deleted) {
+      const ticksSpan = document.createElement('span');
+      ticksSpan.className = 'chat-ticks';
+      const isRead = otherLastReadTs && otherLastReadTs >= msg.ts;
+      if (isRead) {
+        ticksSpan.textContent = '✓✓';
+        ticksSpan.classList.add('read');
+      } else {
+        ticksSpan.textContent = '✓';
+      }
+      footer.appendChild(ticksSpan);
+    }
+
+    const actions = document.createElement('span');
+    actions.className = 'chat-msg-actions';
+
+    // Faculty can delete any message in their course groups; User can delete own message
+    const canDelete = !msg.deleted && (isMine || (currentUser && currentUser.role === 'FACULTY' && activeChatData && activeChatData.type === 'group' && activeChatData.course_id));
+    if (canDelete) {
+      const delBtn = document.createElement('button');
+      delBtn.className = 'chat-action-btn';
+      delBtn.title = 'Delete message';
+      delBtn.textContent = '🗑️';
+      delBtn.onclick = (e) => {
+        e.stopPropagation();
+        deleteChatMessage(msg.id);
+      };
+      actions.appendChild(delBtn);
+    }
+
+    // Report message option on other's messages
+    if (!isMine && !msg.deleted) {
+      const reportBtn = document.createElement('button');
+      reportBtn.className = 'chat-action-btn';
+      reportBtn.title = 'Report message';
+      reportBtn.textContent = '🚩';
+      reportBtn.onclick = (e) => {
+        e.stopPropagation();
+        openReportMessageModal(msg.id);
+      };
+      actions.appendChild(reportBtn);
+    }
+
+    if (actions.children.length > 0) {
+      footer.appendChild(actions);
+    }
+
+    bubble.appendChild(footer);
+    row.appendChild(bubble);
+    return row;
+  }
+
+  function scrollChatToBottom() {
+    const container = document.getElementById('chatMessagesArea');
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }
+
+  async function sendChatMessage() {
+    const textarea = document.getElementById('chatTextInput');
+    if (!textarea || !activeChatId) return;
+    const text = textarea.value.trim();
+    if (!text) return;
+
+    if (text.length > 1000) {
+      showToast({ title: 'Warning', message: 'Message cannot exceed 1000 characters', type: 'urgent' });
+      return;
+    }
+
+    if (socket && socket.connected && chatIsTypingSent) {
+      socket.emit('typing:stop', { conversationId: activeChatId });
+      chatIsTypingSent = false;
+      clearTimeout(chatTypingTimeout);
+    }
+
+    textarea.value = '';
+    textarea.style.height = 'auto';
+
+    try {
+      const data = await fetchApi(`/api/chat/${activeChatId}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({ text })
+      });
+      const alreadyExists = activeChatMessages.some(m => m.id === data.message.id);
+      if (!alreadyExists) {
+        activeChatMessages.push(data.message);
+        appendMessageBubbleToChat(data.message);
+        scrollChatToBottom();
+        updateConversationsCacheWithNewMessage(data.message);
+      }
+    } catch (err) {
+      showToast({ title: 'Cannot Send', message: err.message, type: 'urgent' });
+    }
+  }
+
+  async function deleteChatMessage(msgId) {
+    if (!confirm('Are you sure you want to delete this message?')) return;
+    try {
+      await fetchApi(`/api/chat/messages/${msgId}`, { method: 'DELETE' });
+      onChatMessageDeleted({ id: msgId, conversation_id: activeChatId });
+    } catch (err) {
+      showToast({ title: 'Error', message: err.message, type: 'urgent' });
+    }
+  }
+
+  async function loadOlderChatMessages() {
+    if (!activeChatId || activeChatMessages.length === 0) return;
+    const loadBtn = document.getElementById('chatLoadOlderBtn');
+    if (loadBtn) loadBtn.textContent = 'Loading...';
+    const earliestTs = activeChatMessages[0].ts;
+
+    try {
+      const data = await fetchApi(`/api/chat/${activeChatId}/messages?before=${earliestTs}&limit=30`);
+      const older = data.messages || [];
+      activeChatHasMore = Boolean(data.has_more);
+      if (older.length > 0) {
+        activeChatMessages = older.concat(activeChatMessages);
+        const container = document.getElementById('chatMessagesArea');
+        const prevScrollHeight = container.scrollHeight;
+        renderChatMessagesList(activeChatMessages, true);
+        container.scrollTop = container.scrollHeight - prevScrollHeight;
+      } else {
+        if (loadBtn) loadBtn.remove();
+      }
+    } catch (err) {
+      showToast({ title: 'Error', message: err.message, type: 'urgent' });
+      if (loadBtn) loadBtn.textContent = '↑ Load older messages';
+    }
+  }
+
+  async function toggleGroupAnnounceOnly(announceOnly) {
+    if (!activeChatId) return;
+    try {
+      await fetchApi(`/api/chat/${activeChatId}/settings`, {
+        method: 'POST',
+        body: JSON.stringify({ announce_only: announceOnly ? 1 : 0 })
+      });
+      activeChatData.announce_only = announceOnly ? 1 : 0;
+      updateChatHeaderState();
+      updateChatBottomBarState();
+      showToast({
+        title: 'Group Settings Updated',
+        message: announceOnly ? 'Group is now Announcements Only (students cannot post)' : 'Group is now open (all students can post)',
+        type: 'info'
+      });
+    } catch (err) {
+      showToast({ title: 'Error', message: err.message, type: 'urgent' });
+    }
+  }
+
+  // --- Search Contacts Modal (Name, College ID, Exact Mobile Number) ---
+  async function openContactSearchModal() {
+    const modal = document.getElementById('globalModal');
+    const modalTitle = document.getElementById('modalTitle');
+    const modalBody = document.getElementById('modalBody');
+    if (!modal || !modalTitle || !modalBody) return;
+
+    modalTitle.textContent = '🔍 Search Contacts';
+    modalBody.innerHTML = `
+      <div style="margin-bottom: 12px; font-size: 0.82rem; color: var(--text-muted);">
+        ${currentUser.role === 'STUDENT'
+          ? `Search classmates in your section (${escapeHtml(currentUser.section || 'your section')}) or your course faculty by Name, College ID, or exact mobile number.`
+          : 'Search students enrolled in your courses by Name, College ID, or exact mobile number.'}
+      </div>
+      <div class="chat-contact-search-box">
+        <input type="text" id="contactSearchQuery" class="chat-search-input" placeholder="Search by name, ID or mobile number..." />
+        <button id="contactSearchBtn" class="btn btn-sm btn-primary">Search</button>
+      </div>
+      <div id="contactSearchResults" style="max-height: 320px; overflow-y: auto;">
+        <p style="text-align: center; color: var(--text-muted); font-size: 0.85rem; padding: 20px;">Enter a query above to search.</p>
+      </div>
+    `;
+    modal.classList.remove('hidden');
+
+    const qInput = document.getElementById('contactSearchQuery');
+    const sBtn = document.getElementById('contactSearchBtn');
+    const resDiv = document.getElementById('contactSearchResults');
+
+    async function doSearch() {
+      const q = (qInput.value || '').trim();
+      if (!q) {
+        resDiv.innerHTML = '<p style="text-align: center; color: var(--text-muted); font-size: 0.85rem; padding: 20px;">Please enter a search query.</p>';
+        return;
+      }
+      resDiv.innerHTML = '<div style="text-align: center; padding: 24px;"><div class="spinner"></div></div>';
+      try {
+        const data = await fetchApi(`/api/chat/search?q=${encodeURIComponent(q)}`);
+        const results = data.results || [];
+        if (results.length === 0) {
+          resDiv.innerHTML = '<div style="text-align: center; padding: 24px; color: var(--text-muted); font-size: 0.88rem;">No match found within your scope.</div>';
+          return;
+        }
+
+        resDiv.innerHTML = results.map(u => {
+          const initials = getInitialsAvatar(u.name);
+          let actionBtn = '';
+          if (currentUser.role === 'STUDENT' && u.role === 'STUDENT') {
+            if (u.request_status === 'accepted') {
+              actionBtn = `<button class="btn btn-sm btn-outline-primary contact-open-btn" data-uid="${escapeHtml(u.uid)}">Open Chat</button>`;
+            } else if (u.request_status === 'pending_sent') {
+              actionBtn = `<span class="badge" style="background: var(--bg-muted); color: var(--text-muted); font-size: 0.75rem;">Request Pending</span>`;
+            } else if (u.request_status === 'pending_received') {
+              actionBtn = `<button class="btn btn-sm btn-success contact-open-requests-btn">Accept in Requests</button>`;
+            } else {
+              actionBtn = `<button class="btn btn-sm btn-primary contact-req-btn" data-uid="${escapeHtml(u.uid)}">Send Request</button>`;
+            }
+          } else {
+            actionBtn = `<button class="btn btn-sm btn-primary contact-open-btn" data-uid="${escapeHtml(u.uid)}">Start Chat</button>`;
+          }
+
+          return `
+            <div class="chat-search-result-item">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <div class="chat-avatar" style="width: 38px; height: 38px; font-size: 0.8rem;">${escapeHtml(initials)}</div>
+                <div>
+                  <div style="font-weight: 700; font-size: 0.88rem;">${escapeHtml(u.name)}</div>
+                  <div style="font-size: 0.75rem; color: var(--text-muted);">${escapeHtml(u.section || u.role)} • <span style="font-family: monospace;">${escapeHtml(u.uid)}</span></div>
+                </div>
+              </div>
+              <div>${actionBtn}</div>
+            </div>
+          `;
+        }).join('');
+
+        resDiv.querySelectorAll('.contact-req-btn').forEach(b => {
+          b.addEventListener('click', async () => {
+            const toUid = b.getAttribute('data-uid');
+            b.disabled = true;
+            b.textContent = 'Sending...';
+            try {
+              await fetchApi('/api/chat/requests', { method: 'POST', body: JSON.stringify({ to_uid: toUid }) });
+              b.textContent = 'Requested ✓';
+              showToast({ title: 'Request Sent', message: 'Chat request sent to classmate', type: 'success' });
+            } catch (err) {
+              b.disabled = false;
+              b.textContent = 'Send Request';
+              showToast({ title: 'Error', message: err.message, type: 'urgent' });
+            }
+          });
+        });
+
+        resDiv.querySelectorAll('.contact-open-btn').forEach(b => {
+          b.addEventListener('click', async () => {
+            const targetUid = b.getAttribute('data-uid');
+            modal.classList.add('hidden');
+            try {
+              const res = await fetchApi('/api/chat/direct', { method: 'POST', body: JSON.stringify({ uid: targetUid }) });
+              await loadAndRenderConversations();
+              openChatConversation(res.id);
+            } catch (err) {
+              showToast({ title: 'Error', message: err.message, type: 'urgent' });
+            }
+          });
+        });
+
+        resDiv.querySelectorAll('.contact-open-requests-btn').forEach(b => {
+          b.addEventListener('click', () => {
+            modal.classList.add('hidden');
+            openChatRequestsModal();
+          });
+        });
+
+      } catch (err) {
+        resDiv.innerHTML = `<div class="error-box">${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    sBtn.addEventListener('click', doSearch);
+    qInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        doSearch();
+      }
+    });
+    qInput.focus();
+  }
+
+  // --- Chat Requests Modal (Accept / Decline) ---
+  async function openChatRequestsModal() {
+    const modal = document.getElementById('globalModal');
+    const modalTitle = document.getElementById('modalTitle');
+    const modalBody = document.getElementById('modalBody');
+    if (!modal || !modalTitle || !modalBody) return;
+
+    modalTitle.textContent = '📬 Chat Requests';
+    modalBody.innerHTML = '<div style="padding: 24px; text-align: center;"><div class="spinner"></div></div>';
+    modal.classList.remove('hidden');
+
+    try {
+      const data = await fetchApi('/api/chat/requests');
+      const incoming = data.incoming || [];
+      const outgoing = data.outgoing || [];
+
+      if (incoming.length === 0 && outgoing.length === 0) {
+        modalBody.innerHTML = '<div style="padding: 30px; text-align: center; color: var(--text-muted); font-size: 0.88rem;">No pending chat requests.</div>';
+        return;
+      }
+
+      let html = '';
+      if (incoming.length > 0) {
+        html += '<h4 style="margin: 0 0 10px 0; font-size: 0.88rem; font-weight: 700;">Incoming Requests</h4>';
+        incoming.forEach(r => {
+          const initials = getInitialsAvatar(r.from_name);
+          html += `
+            <div class="chat-search-result-item">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <div class="chat-avatar" style="width: 36px; height: 36px; font-size: 0.78rem;">${escapeHtml(initials)}</div>
+                <div>
+                  <div style="font-weight: 700; font-size: 0.85rem;">${escapeHtml(r.from_name)}</div>
+                  <div style="font-size: 0.72rem; color: var(--text-muted);">${escapeHtml(r.from_section)} • ${escapeHtml(r.from_uid)}</div>
+                </div>
+              </div>
+              <div style="display: flex; gap: 6px;">
+                <button class="btn btn-sm btn-primary req-accept-btn" data-id="${r.id}">Accept</button>
+                <button class="btn btn-sm btn-outline-danger req-decline-btn" data-id="${r.id}">Decline</button>
+              </div>
+            </div>
+          `;
+        });
+      }
+
+      if (outgoing.length > 0) {
+        html += '<h4 style="margin: 16px 0 10px 0; font-size: 0.88rem; font-weight: 700; color: var(--text-muted);">Outgoing Requests (Pending)</h4>';
+        outgoing.forEach(r => {
+          const initials = getInitialsAvatar(r.to_name);
+          html += `
+            <div class="chat-search-result-item" style="opacity: 0.85;">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <div class="chat-avatar" style="width: 36px; height: 36px; font-size: 0.78rem;">${escapeHtml(initials)}</div>
+                <div>
+                  <div style="font-weight: 700; font-size: 0.85rem;">${escapeHtml(r.to_name)}</div>
+                  <div style="font-size: 0.72rem; color: var(--text-muted);">${escapeHtml(r.to_section)} • ${escapeHtml(r.to_uid)}</div>
+                </div>
+              </div>
+              <span style="font-size: 0.72rem; color: var(--text-muted);">Waiting for approval</span>
+            </div>
+          `;
+        });
+      }
+
+      modalBody.innerHTML = html;
+
+      modalBody.querySelectorAll('.req-accept-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const reqId = btn.getAttribute('data-id');
+          btn.disabled = true;
+          try {
+            const res = await fetchApi(`/api/chat/requests/${reqId}/accept`, { method: 'POST' });
+            modal.classList.add('hidden');
+            showToast({ title: 'Request Accepted', message: 'You can now message each other!', type: 'success' });
+            await loadAndRenderConversations();
+            updatePendingRequestsBadge();
+            if (res.conversation_id) openChatConversation(res.conversation_id);
+          } catch (err) {
+            showToast({ title: 'Error', message: err.message, type: 'urgent' });
+          }
+        });
+      });
+
+      modalBody.querySelectorAll('.req-decline-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const reqId = btn.getAttribute('data-id');
+          btn.disabled = true;
+          try {
+            await fetchApi(`/api/chat/requests/${reqId}/decline`, { method: 'POST' });
+            showToast({ title: 'Declined', message: 'Chat request declined', type: 'info' });
+            openChatRequestsModal();
+            updatePendingRequestsBadge();
+          } catch (err) {
+            showToast({ title: 'Error', message: err.message, type: 'urgent' });
+          }
+        });
+      });
+
+    } catch (err) {
+      modalBody.innerHTML = `<div class="error-box">${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  // --- Faculty Custom Group Modal ---
+  async function openFacultyNewGroupModal() {
+    const modal = document.getElementById('globalModal');
+    const modalTitle = document.getElementById('modalTitle');
+    const modalBody = document.getElementById('modalBody');
+    if (!modal || !modalTitle || !modalBody) return;
+
+    modalTitle.textContent = '👥 Create Custom Group';
+    modalBody.innerHTML = '<div style="padding: 24px; text-align: center;"><div class="spinner"></div></div>';
+    modal.classList.remove('hidden');
+
+    try {
+      const data = await fetchApi('/api/chat/eligible-contacts');
+      const students = data.contacts || [];
+
+      if (students.length === 0) {
+        modalBody.innerHTML = '<div style="padding: 24px; text-align: center; color: var(--text-muted);">No enrolled students found in your courses.</div>';
+        return;
+      }
+
+      modalBody.innerHTML = `
+        <div style="margin-bottom: 14px;">
+          <label style="display: block; font-size: 0.82rem; font-weight: 700; margin-bottom: 6px;">Group Name *</label>
+          <input type="text" id="newGroupNameInput" class="chat-search-input" placeholder="e.g. Lab Project Team A" maxlength="60" />
+        </div>
+        <label style="display: block; font-size: 0.82rem; font-weight: 700; margin-bottom: 6px;">Select Students (Enrolled in your courses):</label>
+        <div style="max-height: 220px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: var(--radius-control); padding: 8px; margin-bottom: 14px;">
+          ${students.map(s => `
+            <label style="display: flex; align-items: center; gap: 8px; padding: 6px; cursor: pointer; font-size: 0.84rem; border-bottom: 1px solid var(--border-color);">
+              <input type="checkbox" class="new-group-student-cb" value="${escapeHtml(s.uid)}" />
+              <div style="flex: 1;">
+                <strong>${escapeHtml(s.name)}</strong> (${escapeHtml(s.uid)})
+                <div style="font-size: 0.72rem; color: var(--text-muted);">${escapeHtml(s.course_name || '')}</div>
+              </div>
+            </label>
+          `).join('')}
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 8px;">
+          <button id="cancelCreateGroupBtn" class="btn btn-sm btn-secondary">Cancel</button>
+          <button id="confirmCreateGroupBtn" class="btn btn-sm btn-primary">Create Group</button>
+        </div>
+      `;
+
+      document.getElementById('cancelCreateGroupBtn').onclick = () => modal.classList.add('hidden');
+      document.getElementById('confirmCreateGroupBtn').onclick = async () => {
+        const name = (document.getElementById('newGroupNameInput').value || '').trim();
+        if (!name) {
+          showToast({ title: 'Validation', message: 'Please enter a group name', type: 'urgent' });
+          return;
+        }
+        const selected = Array.from(modalBody.querySelectorAll('.new-group-student-cb:checked')).map(cb => cb.value);
+        if (selected.length === 0) {
+          showToast({ title: 'Validation', message: 'Please select at least one student', type: 'urgent' });
+          return;
+        }
+
+        try {
+          const res = await fetchApi('/api/chat/groups', {
+            method: 'POST',
+            body: JSON.stringify({ name, student_uids: selected })
+          });
+          modal.classList.add('hidden');
+          showToast({ title: 'Group Created', message: `Created group ${name}`, type: 'success' });
+          await loadAndRenderConversations();
+          if (res.id) openChatConversation(res.id);
+        } catch (err) {
+          showToast({ title: 'Error', message: err.message, type: 'urgent' });
+        }
+      };
+    } catch (err) {
+      modalBody.innerHTML = `<div class="error-box">${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  // --- Report Message Modal ---
+  async function openReportMessageModal(msgId) {
+    const reason = prompt('Please specify a reason for reporting this message:\n(e.g., Harassment, Spam, Academic Dishonesty, Inappropriate Language)', 'Inappropriate content');
+    if (reason === null) return;
+    const cleanReason = reason.trim();
+    if (!cleanReason) return;
+
+    try {
+      await fetchApi('/api/chat/report', {
+        method: 'POST',
+        body: JSON.stringify({ message_id: msgId, reason: cleanReason })
+      });
+      showToast({ title: 'Report Submitted', message: 'Thank you. Administrators have been notified.', type: 'info' });
+    } catch (err) {
+      showToast({ title: 'Error', message: err.message, type: 'urgent' });
+    }
   }
 
   // --- Clock updater ---
@@ -2845,16 +4505,18 @@
       document.getElementById('loginPasskey').value = pass;
     },
 
-    fillSignup(uid, name) {
+    fillSignup(uid, name, phone) {
       document.getElementById('signupUid').value = uid;
       document.getElementById('signupName').value = name;
+      const phoneEl = document.getElementById('signupPhone');
+      if (phoneEl) phoneEl.value = phone || '';
       document.getElementById('signupPasskey').value = 'pass123';
       document.getElementById('signupConfirmPasskey').value = 'pass123';
     },
 
     async handleLogin(e) {
       e.preventDefault();
-      const uid = document.getElementById('loginUid').value.trim();
+      const identifier = document.getElementById('loginUid').value.trim();
       const passkey = document.getElementById('loginPasskey').value.trim();
       const role = document.getElementById('loginRole').value;
       const errEl = document.getElementById('loginErrorMsg');
@@ -2863,7 +4525,7 @@
         errEl.classList.add('hidden');
         const res = await fetchApi('/api/auth/login', {
           method: 'POST',
-          body: JSON.stringify({ uid, passkey, role })
+          body: JSON.stringify({ identifier, uid: identifier, passkey, role })
         });
 
         currentUser = res.user;
@@ -2880,6 +4542,8 @@
       e.preventDefault();
       const uid = document.getElementById('signupUid').value.trim();
       const name = document.getElementById('signupName').value.trim();
+      const phoneEl = document.getElementById('signupPhone');
+      const phone = phoneEl ? phoneEl.value.trim() : '';
       const passkey = document.getElementById('signupPasskey').value.trim();
       const confirmPasskey = document.getElementById('signupConfirmPasskey').value.trim();
       const errEl = document.getElementById('signupErrorMsg');
@@ -2888,7 +4552,7 @@
         errEl.classList.add('hidden');
         const res = await fetchApi('/api/auth/signup', {
           method: 'POST',
-          body: JSON.stringify({ uid, name, passkey, confirmPasskey })
+          body: JSON.stringify({ uid, name, passkey, confirmPasskey, phone })
         });
 
         currentUser = res.user;
@@ -2907,6 +4571,55 @@
       updateNavUserArea();
       window.location.hash = '#login';
       showToast({ title: 'Logged out', message: 'See you next time!' });
+    },
+
+    setMobileDay(d) {
+      activeMobileDay = d;
+      if (cachedWeeklyData) {
+        renderWeeklyCalendarContent(cachedWeeklyData);
+      }
+    },
+
+    async refreshTimetable() {
+      try {
+        const data = await fetchApi('/api/timetable/weekly');
+        renderWeeklyCalendarContent(data);
+        showToast({ title: 'Timetable Refreshed', message: 'Class marks up to date.' });
+      } catch (err) {
+        showToast({ title: 'Refresh Failed', message: err.message, type: 'urgent' });
+      }
+    },
+
+    async setSimulatedTime(e) {
+      if (e) e.preventDefault();
+      const day = Number(document.getElementById('simDaySelect').value);
+      const time = document.getElementById('simTimeInput').value;
+      if (!day || !time) return;
+      try {
+        await fetchApi('/api/timetable/simulated-time', {
+          method: 'POST',
+          body: JSON.stringify({ day, time })
+        });
+        showToast({ title: 'Demo Clock Set', message: `Simulated: Day ${day} at ${time}`, type: 'success' });
+        const data = await fetchApi('/api/timetable/weekly');
+        renderWeeklyCalendarContent(data);
+      } catch (err) {
+        alert(err.message);
+      }
+    },
+
+    async clearSimulatedTime() {
+      try {
+        await fetchApi('/api/timetable/simulated-time', {
+          method: 'POST',
+          body: JSON.stringify({ simulatedTime: '' })
+        });
+        showToast({ title: 'Clock Reset', message: 'Restored real-time system clock', type: 'success' });
+        const data = await fetchApi('/api/timetable/weekly');
+        renderWeeklyCalendarContent(data);
+      } catch (err) {
+        alert(err.message);
+      }
     },
 
     facSelectedStatus: 'ongoing',
@@ -3504,6 +5217,10 @@
               <input type="text" id="rosterSection" class="form-input" value="CSE-A">
             </div>
           </div>
+          <div class="form-group mt-2">
+            <label>Mobile Phone (10 digits, optional)</label>
+            <input type="tel" id="rosterPhone" class="form-input" placeholder="e.g. 9876543210">
+          </div>
           <button type="submit" class="btn btn-primary btn-block mt-3">Add to Roster</button>
         </form>
       `);
@@ -3516,11 +5233,13 @@
       const name = document.getElementById('rosterName').value.trim();
       const dept = document.getElementById('rosterDept').value.trim();
       const section = document.getElementById('rosterSection').value.trim();
+      const phoneEl = document.getElementById('rosterPhone');
+      const phone = phoneEl ? phoneEl.value.trim() : '';
 
       try {
         await fetchApi('/api/admin/roster', {
           method: 'POST',
-          body: JSON.stringify({ uid, role, name, dept, section })
+          body: JSON.stringify({ uid, role, name, dept, section, phone })
         });
         closeModal();
         showToast({ title: 'Roster Updated', type: 'success' });
@@ -3541,9 +5260,83 @@
       try {
         const res = await fetchFormData('/api/admin/roster/import', formData);
         showToast({ title: 'Roster Imported!', message: `Imported ${res.imported} records`, type: 'success' });
+        if (res.errors && res.errors.length > 0) {
+          alert(`Roster import completed with row notices:\n${res.errors.join('\n')}`);
+        }
         renderAdminHome();
       } catch (err) {
         alert(err.message);
+      }
+    },
+
+    openUserProfileModal() {
+      if (!currentUser) return;
+      openModal('My Campus Profile', `
+        <div style="display: flex; flex-direction: column; gap: 14px;">
+          <div style="display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--bg-card); border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
+            <div style="width: 48px; height: 48px; border-radius: 50%; background: var(--primary-light); color: var(--primary); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.2rem;">
+              ${escapeHtml(currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'U')}
+            </div>
+            <div>
+              <div style="font-weight: 800; font-size: 1.05rem;">${escapeHtml(currentUser.name)}</div>
+              <div style="font-size: 0.8rem; color: var(--text-muted);">${escapeHtml(currentUser.role)} • ${escapeHtml(currentUser.uid)}</div>
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 0.85rem;">
+            <div class="stat-box">
+              <div style="color: var(--text-muted); font-size: 0.75rem;">Department</div>
+              <div style="font-weight: 700;">${escapeHtml(currentUser.dept || 'CSE')}</div>
+            </div>
+            <div class="stat-box">
+              <div style="color: var(--text-muted); font-size: 0.75rem;">Section</div>
+              <div style="font-weight: 700;">${escapeHtml(currentUser.section || 'ALL')}</div>
+            </div>
+          </div>
+          <div style="padding: 12px; background: var(--bg-input); border-radius: var(--radius-md);">
+            <div style="font-size: 0.75rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase;">Registered Mobile Number</div>
+            <div style="font-size: 0.95rem; font-weight: 700; margin-top: 4px; font-family: var(--font-mono);">
+              ${currentUser.phone ? escapeHtml(currentUser.phone) : '<span style="color: var(--text-muted); font-weight: 400;">No mobile number linked</span>'}
+            </div>
+            <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 4px;">Private to you and campus admins. Never shared publicly.</div>
+          </div>
+          <button type="button" class="btn btn-secondary btn-block" onclick="window.ClassPulse.openChangePassModal()">Change Passkey</button>
+        </div>
+      `);
+    },
+
+    openChangePassModal() {
+      openModal('Change Security Passkey', `
+        <form onsubmit="window.ClassPulse.submitChangePass(event)">
+          <div class="form-group">
+            <label>Current Passkey *</label>
+            <input type="password" id="changePassOld" class="form-input" required autocomplete="current-password">
+          </div>
+          <div class="form-group mt-2">
+            <label>New Passkey (min 6 chars) *</label>
+            <input type="password" id="changePassNew" class="form-input" minlength="6" required autocomplete="new-password">
+          </div>
+          <p id="changePassModalErr" class="text-danger mt-2 hidden"></p>
+          <button type="submit" class="btn btn-primary btn-block mt-3">Update Passkey</button>
+        </form>
+      `);
+    },
+
+    async submitChangePass(e) {
+      e.preventDefault();
+      const oldPasskey = document.getElementById('changePassOld').value.trim();
+      const newPasskey = document.getElementById('changePassNew').value.trim();
+      const errEl = document.getElementById('changePassModalErr');
+      try {
+        errEl.classList.add('hidden');
+        await fetchApi('/api/auth/change-passkey', {
+          method: 'POST',
+          body: JSON.stringify({ oldPasskey, newPasskey })
+        });
+        closeModal();
+        showToast({ title: 'Success', message: 'Passkey updated successfully', type: 'success' });
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
       }
     },
 
@@ -4033,7 +5826,7 @@
     return safe;
   }
 
-  function appendAssistantBubble(sender, text, suggestions) {
+  function appendAssistantBubble(sender, text, suggestions, source) {
     const msgsContainer = document.getElementById('assistantMessages');
     if (!msgsContainer) return;
 
@@ -4043,6 +5836,14 @@
     const bubbleDiv = document.createElement('div');
     bubbleDiv.className = 'assistant-bubble';
     bubbleDiv.innerHTML = formatAssistantText(text);
+
+    if (sender === 'assistant' && source) {
+      const badge = document.createElement('span');
+      badge.className = 'assistant-source-badge';
+      badge.textContent = source;
+      bubbleDiv.appendChild(badge);
+    }
+
     msgDiv.appendChild(bubbleDiv);
 
     if (suggestions && suggestions.length > 0) {
@@ -4078,11 +5879,12 @@
     if (inputEl) inputEl.disabled = true;
     if (sendBtn) sendBtn.disabled = true;
 
-    // Show typing indicator
+    // Show typing indicator with Thinking...
     const typingEl = document.createElement('div');
     typingEl.className = 'assistant-typing';
     typingEl.id = 'assistantTypingIndicator';
     typingEl.innerHTML = `
+      <span class="assistant-typing-text">Thinking...</span>
       <span class="assistant-dot"></span>
       <span class="assistant-dot"></span>
       <span class="assistant-dot"></span>
@@ -4099,15 +5901,14 @@
       const typing = document.getElementById('assistantTypingIndicator');
       if (typing) typing.remove();
 
-      appendAssistantBubble('assistant', res.reply, res.suggestions);
+      appendAssistantBubble('assistant', res.reply, res.suggestions, res.source);
     } catch (err) {
       const typing = document.getElementById('assistantTypingIndicator');
       if (typing) typing.remove();
-      appendAssistantBubble('assistant', 'Sorry, I had trouble processing that request: ' + (err.message || 'Network error'), [
-        "What should I do right now?",
-        "Check my attendance",
-        "Pending assignments"
-      ]);
+      const fallbackChips = (currentUser && (currentUser.role === 'FACULTY' || currentUser.role === 'ADMIN'))
+        ? ["Classes today", "Who is absent or at risk?", "Pending submissions to grade"]
+        : ["What should I do right now?", "Check my attendance", "Pending assignments"];
+      appendAssistantBubble('assistant', 'Sorry, I had trouble processing that request: ' + (err.message || 'Network error'), fallbackChips, 'Rules');
     } finally {
       if (inputEl) {
         inputEl.disabled = false;
@@ -4120,16 +5921,32 @@
   function initAssistantChat() {
     const msgsContainer = document.getElementById('assistantMessages');
     if (msgsContainer && msgsContainer.children.length === 0) {
-      const studentName = (currentUser && currentUser.name) ? currentUser.name : 'Student';
-      appendAssistantBubble(
-        'assistant',
-        `Hi **${studentName}**! 👋 I'm your ClassPulse assistant.\n\nAsk me anything about your current class, attendance shortage, deadlines, marks, or campus events.`,
-        [
-          "What should I do right now?",
-          "Check my attendance",
-          "Pending assignments"
-        ]
-      );
+      const isFaculty = currentUser && (currentUser.role === 'FACULTY' || currentUser.role === 'ADMIN');
+      if (isFaculty) {
+        const facName = currentUser.name || 'Faculty';
+        appendAssistantBubble(
+          'assistant',
+          `Hi Prof. **${facName}**! 👋 I'm your ClassPulse assistant.\n\nAsk me about your classes today, students at risk, pending submissions to grade, or drafting announcements.`,
+          [
+            "Classes today",
+            "Who is absent or at risk?",
+            "Pending submissions to grade"
+          ],
+          'Rules'
+        );
+      } else {
+        const studentName = (currentUser && currentUser.name) ? currentUser.name : 'Student';
+        appendAssistantBubble(
+          'assistant',
+          `Hi **${studentName}**! 👋 I'm your ClassPulse assistant.\n\nAsk me anything about your current class, attendance shortage, deadlines, marks, or campus events.`,
+          [
+            "What should I do right now?",
+            "Check my attendance",
+            "Pending assignments"
+          ],
+          'Rules'
+        );
+      }
     }
   }
 

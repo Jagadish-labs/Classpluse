@@ -103,7 +103,7 @@ async function runDeployPwaImpactVerification() {
   console.log('\n5. Testing Service Worker (/sw.js)...');
   const swRes = await anon.get('/sw.js');
   assert.strictEqual(swRes.status, 200, '/sw.js must return 200');
-  assert.ok(swRes.data.includes('classpulse-shell-v1'), 'SW contains shell cache name');
+  assert.ok(swRes.data.includes('classpulse-shell-v'), 'SW contains shell cache name');
   assert.ok(swRes.data.includes('/api/'), 'SW contains API intercept logic');
   assert.ok(swRes.data.includes('You are offline. Reconnect to see live class status.'), 'SW contains offline fallback page');
   console.log('   ✅ Service Worker properly configured with offline page and network pass-through');

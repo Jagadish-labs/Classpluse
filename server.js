@@ -11,11 +11,15 @@ const bcrypt = require('bcryptjs');
 const QRCode = require('qrcode');
 const jwt = require('jsonwebtoken');
 
-const { db, seedDatabase, getImpactMetrics, recordImpactUpdate } = require('./db');
+const { db, seedDatabase, getImpactMetrics, recordImpactUpdate, addStudentToCourseChat, canDirectChat, isUserBlocked } = require('./db');
 const { resolveActiveClass, computeActionLine, getDirectiveSummary } = require('./directive');
+const { processAssistantMessage } = require('./assistant-engine');
 const {
   JWT_SECRET,
   COOKIE_NAME,
+  normalizePhone,
+  looksLikePhone,
+  normalizeIdentifier,
   rateLimitLogin,
   recordFailedLogin,
   clearFailedLogins,
@@ -23,6 +27,7 @@ const {
   setAuthCookie,
   clearAuthCookie,
   authenticate,
+  hasValidSession,
   requireRole,
   requireEventOrganizer,
   requireCourseAccess,
@@ -83,7 +88,25 @@ const upload = multer({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
-app.use(express.static(path.join(__dirname, 'public')));
+
+// Landing & App Entry Routes
+app.get('/', (req, res) => {
+  if (hasValidSession(req)) {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  } else {
+    res.sendFile(path.join(__dirname, 'public', 'landing.html'));
+  }
+});
+
+app.get('/app', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.get('/landing', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'landing.html'));
+});
+
+app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
 // Network Helpers
 function getLanIp() {
@@ -115,16 +138,74 @@ function addStatusLog(text) {
   `);
 }
 
+function getEffectiveNow() {
+  const row = db.prepare('SELECT value FROM system_state WHERE key = ?').get('simulated_time');
+  if (row && row.value && row.value.trim() !== '') {
+    const parsed = new Date(row.value);
+    if (!isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+  return new Date();
+}
+
+function formatDateStr(dateObj) {
+  const y = dateObj.getFullYear();
+  const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const d = String(dateObj.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function getWeekDates(nowDate) {
+  const jsDay = nowDate.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+  const diffToMon = jsDay === 0 ? -6 : 1 - jsDay;
+  const monday = new Date(nowDate);
+  monday.setDate(nowDate.getDate() + diffToMon);
+  monday.setHours(0, 0, 0, 0);
+
+  const weekDates = {};
+  for (let i = 1; i <= 6; i++) {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + (i - 1));
+    weekDates[i] = formatDateStr(d);
+  }
+  return { monday, weekDates };
+}
+
 function getFullTimetableState() {
-  const timetable = db.prepare('SELECT * FROM timetable ORDER BY s ASC').all();
+  const effectiveNow = getEffectiveNow();
+  const dateStr = formatDateStr(effectiveNow);
+  const jsDay = effectiveNow.getDay();
+  const dayNum = jsDay === 0 ? 7 : jsDay;
+
+  const queryDay = (dayNum >= 1 && dayNum <= 6) ? dayNum : 1;
+  const timetable = db.prepare('SELECT * FROM timetable WHERE day = ? ORDER BY s ASC').all(queryDay);
+
+  const dailyStatuses = db.prepare('SELECT * FROM daily_class_status WHERE date_str = ?').all(dateStr);
+  const statusMap = new Map(dailyStatuses.map(ds => [ds.slot_id, ds]));
+
+  const mergedClasses = timetable.map(cls => {
+    const ds = statusMap.get(cls.id);
+    return {
+      ...cls,
+      st: ds ? ds.st : cls.st,
+      note: ds ? ds.note : cls.note,
+      ts: ds ? ds.ts : cls.ts
+    };
+  });
+
   const noticeRow = db.prepare('SELECT value FROM system_state WHERE key = ?').get('notice');
   const demoRow = db.prepare('SELECT value FROM system_state WHERE key = ?').get('demo_class_id');
+  const simRow = db.prepare('SELECT value FROM system_state WHERE key = ?').get('simulated_time');
   const logs = db.prepare('SELECT * FROM status_logs ORDER BY id DESC LIMIT 20').all();
 
   return {
     notice: noticeRow ? noticeRow.value : '',
     demo: demoRow && demoRow.value ? Number(demoRow.value) : null,
-    classes: timetable,
+    simulatedTime: simRow ? simRow.value : null,
+    effectiveNow: effectiveNow.toISOString(),
+    effectiveDay: dayNum,
+    classes: mergedClasses,
     log: logs.map(l => ({ t: l.text, ts: l.ts }))
   };
 }
@@ -133,33 +214,51 @@ function getFullTimetableState() {
 // AUTHENTICATION ROUTES (Phase 1)
 // ============================================================================
 
-// POST /api/auth/login (Rate limited)
+// POST /api/auth/login (Rate limited per identifier)
 app.post('/api/auth/login', rateLimitLogin, (req, res) => {
-  const { uid, passkey, role } = req.body;
-  if (!uid || !passkey) {
-    return res.status(400).json({ error: 'College ID and passkey are required' });
+  const { uid, identifier: rawId, phone, passkey, role } = req.body;
+  const input = rawId || uid || phone;
+  if (!input || !passkey) {
+    return res.status(400).json({ error: 'College ID or mobile number and passkey are required' });
   }
 
-  const cleanUid = sanitize(uid, 20).toUpperCase();
-  const user = db.prepare('SELECT * FROM users WHERE uid = ?').get(cleanUid);
+  let user = null;
+  let identifierKey = '';
 
+  if (looksLikePhone(input)) {
+    const normPhone = normalizePhone(input);
+    if (!normPhone) {
+      recordFailedLogin(input);
+      return res.status(401).json({ error: 'Invalid ID/number or passkey' });
+    }
+    identifierKey = normPhone;
+    user = db.prepare('SELECT * FROM users WHERE phone = ?').get(normPhone);
+  } else {
+    identifierKey = sanitize(input, 20).toUpperCase();
+    user = db.prepare('SELECT * FROM users WHERE uid = ?').get(identifierKey);
+  }
+
+  // Return generic error for every failure (no account enumeration)
   if (!user) {
-    recordFailedLogin(cleanUid);
-    return res.status(401).json({ error: 'Invalid College ID or user not activated' });
+    recordFailedLogin(identifierKey);
+    return res.status(401).json({ error: 'Invalid ID/number or passkey' });
   }
 
   if (role && user.role !== role) {
-    recordFailedLogin(cleanUid);
-    return res.status(401).json({ error: `Account role mismatch. Expected ${role}, found ${user.role}` });
+    recordFailedLogin(identifierKey);
+    return res.status(401).json({ error: 'Invalid ID/number or passkey' });
   }
 
   const isMatch = bcrypt.compareSync(passkey, user.password_hash);
   if (!isMatch) {
-    recordFailedLogin(cleanUid);
-    return res.status(401).json({ error: 'Incorrect passkey. Please try again.' });
+    recordFailedLogin(identifierKey);
+    return res.status(401).json({ error: 'Invalid ID/number or passkey' });
   }
 
-  clearFailedLogins(cleanUid);
+  clearFailedLogins(identifierKey);
+  if (user.uid) clearFailedLogins(user.uid);
+  if (user.phone) clearFailedLogins(user.phone);
+
   const token = generateToken(user);
   setAuthCookie(res, token);
 
@@ -171,6 +270,7 @@ app.post('/api/auth/login', rateLimitLogin, (req, res) => {
       name: user.name,
       dept: user.dept,
       section: user.section,
+      phone: user.phone || null, // Shown only to the user themselves
       is_organizer: Boolean(user.is_organizer),
       must_change_pass: Boolean(user.must_change_pass)
     }
@@ -179,7 +279,7 @@ app.post('/api/auth/login', rateLimitLogin, (req, res) => {
 
 // POST /api/auth/signup (First-time Activation)
 app.post('/api/auth/signup', (req, res) => {
-  const { uid, name, passkey, confirmPasskey } = req.body;
+  const { uid, name, passkey, confirmPasskey, phone } = req.body;
   if (!uid || !name || !passkey || !confirmPasskey) {
     return res.status(400).json({ error: 'All fields are required' });
   }
@@ -197,19 +297,24 @@ app.post('/api/auth/signup', (req, res) => {
 
   // Check Roster
   const rosterEntry = db.prepare('SELECT * FROM roster WHERE uid = ?').get(cleanUid);
-  if (!rosterEntry) {
-    return res.status(400).json({ error: 'College ID not found in authorised campus roster.' });
-  }
-
-  if (rosterEntry.registered) {
-    return res.status(400).json({ error: 'This ID has already been activated. Please log in.' });
+  if (!rosterEntry || rosterEntry.registered) {
+    return res.status(400).json({ error: 'Unable to activate account with provided details' });
   }
 
   // Verify Name match (case-insensitive)
   if (rosterEntry.name.trim().toLowerCase() !== cleanName.toLowerCase()) {
-    return res.status(400).json({
-      error: `Full name does not match campus roster records for ID ${cleanUid}.`
-    });
+    return res.status(400).json({ error: 'Unable to activate account with provided details' });
+  }
+
+  // If roster entry has a phone number, signup must also provide that number and it must match
+  if (rosterEntry.phone) {
+    if (!phone) {
+      return res.status(400).json({ error: 'Mobile number registered on campus roster is required' });
+    }
+    const normPhone = normalizePhone(phone);
+    if (!normPhone || normPhone !== rosterEntry.phone) {
+      return res.status(400).json({ error: 'Invalid credentials or mobile number mismatch' });
+    }
   }
 
   // Hash passkey and register
@@ -218,9 +323,9 @@ app.post('/api/auth/signup', (req, res) => {
 
   const registerTx = db.transaction(() => {
     db.prepare(`
-      INSERT INTO users (uid, role, name, dept, section, password_hash, must_change_pass, is_organizer, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
-    `).run(rosterEntry.uid, rosterEntry.role, rosterEntry.name, rosterEntry.dept, rosterEntry.section, hash, rosterEntry.is_organizer || 0, now);
+      INSERT INTO users (uid, role, name, dept, section, password_hash, must_change_pass, is_organizer, phone, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+    `).run(rosterEntry.uid, rosterEntry.role, rosterEntry.name, rosterEntry.dept, rosterEntry.section, hash, rosterEntry.is_organizer || 0, rosterEntry.phone || null, now);
 
     db.prepare('UPDATE roster SET registered = 1 WHERE uid = ?').run(rosterEntry.uid);
   });
@@ -240,6 +345,7 @@ app.post('/api/auth/signup', (req, res) => {
       name: user.name,
       dept: user.dept,
       section: user.section,
+      phone: user.phone || null, // Shown only to the user themselves
       is_organizer: Boolean(user.is_organizer),
       must_change_pass: false
     }
@@ -255,6 +361,7 @@ app.get('/api/auth/me', authenticate, (req, res) => {
       name: req.user.name,
       dept: req.user.dept,
       section: req.user.section,
+      phone: req.user.phone || null, // Shown only to the user themselves
       is_organizer: Boolean(req.user.is_organizer),
       must_change_pass: Boolean(req.user.must_change_pass)
     }
@@ -481,9 +588,78 @@ app.get('/api/timetable/today', authenticate, (req, res) => {
   res.json(state);
 });
 
+// GET /api/timetable/weekly (Weekly Calendar View)
+app.get('/api/timetable/weekly', authenticate, (req, res) => {
+  const effectiveNow = getEffectiveNow();
+  const { weekDates } = getWeekDates(effectiveNow);
+  const jsDay = effectiveNow.getDay();
+
+  let slots = db.prepare('SELECT * FROM timetable ORDER BY day ASC, s ASC').all();
+
+  if (req.user.role === 'FACULTY') {
+    slots = slots.filter(s => s.faculty_id === req.user.uid);
+  }
+
+  const dateList = Object.values(weekDates);
+  const placeholders = dateList.map(() => '?').join(',');
+  const dailyStatuses = db.prepare(`SELECT * FROM daily_class_status WHERE date_str IN (${placeholders})`).all(...dateList);
+
+  const statusMap = new Map();
+  for (const ds of dailyStatuses) {
+    statusMap.set(`${ds.slot_id}_${ds.date_str}`, ds);
+  }
+
+  const weeklyClasses = slots.map(slot => {
+    const slotDate = weekDates[slot.day];
+    const ds = statusMap.get(`${slot.id}_${slotDate}`);
+    return {
+      ...slot,
+      date_str: slotDate,
+      st: ds ? ds.st : slot.st,
+      note: ds ? ds.note : slot.note,
+      ts: ds ? ds.ts : slot.ts
+    };
+  });
+
+  const simRow = db.prepare('SELECT value FROM system_state WHERE key = ?').get('simulated_time');
+
+  res.json({
+    effectiveNow: effectiveNow.toISOString(),
+    effectiveDay: jsDay,
+    simulatedTime: simRow ? simRow.value : null,
+    weekDates,
+    classes: weeklyClasses,
+    userRole: req.user.role,
+    userUid: req.user.uid
+  });
+});
+
+// POST /api/timetable/simulated-time (Admin only, Demo clock)
+app.post('/api/timetable/simulated-time', authenticate, requireRole('ADMIN'), (req, res) => {
+  const { simulatedTime, day, time } = req.body;
+  let timeVal = '';
+
+  if (simulatedTime !== undefined && simulatedTime !== null && String(simulatedTime).trim() !== '') {
+    timeVal = String(simulatedTime).trim();
+  } else if (day && time) {
+    const now = getEffectiveNow();
+    const { weekDates } = getWeekDates(now);
+    const targetDateStr = weekDates[day] || formatDateStr(now);
+    timeVal = `${targetDateStr}T${time}:00`;
+  }
+
+  db.prepare('INSERT OR REPLACE INTO system_state (key, value) VALUES (?, ?)').run('simulated_time', timeVal);
+
+  const updatedState = getFullTimetableState();
+  io.emit('state:update', updatedState);
+  io.emit('simulated_time:updated', { simulatedTime: timeVal, effectiveNow: updatedState.effectiveNow });
+
+  res.json({ success: true, simulatedTime: timeVal, state: updatedState });
+});
+
 // POST /api/timetable/status (Faculty or Admin)
 app.post('/api/timetable/status', authenticate, requireRole('FACULTY', 'ADMIN'), (req, res) => {
-  const { timetableId, st, note } = req.body;
+  const { timetableId, st, note, date_str } = req.body;
   if (!timetableId || !st || !STATUS_LABELS[st]) {
     return res.status(400).json({ error: 'Invalid class ID or status code' });
   }
@@ -499,7 +675,16 @@ app.post('/api/timetable/status', authenticate, requireRole('FACULTY', 'ADMIN'),
 
   const cleanNote = sanitize(note, 80);
   const now = Date.now();
+  const effectiveNow = getEffectiveNow();
+  const targetDateStr = date_str || formatDateStr(effectiveNow);
 
+  // Save to daily_class_status table for specific date
+  db.prepare(`
+    INSERT OR REPLACE INTO daily_class_status (slot_id, date_str, st, note, ts)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(item.id, targetDateStr, st, cleanNote, now);
+
+  // Also update timetable for fallback compatibility
   db.prepare(`
     UPDATE timetable
     SET st = ?, note = ?, ts = ?
@@ -507,7 +692,7 @@ app.post('/api/timetable/status', authenticate, requireRole('FACULTY', 'ADMIN'),
   `).run(st, cleanNote, now, item.id);
 
   const noteSuffix = cleanNote ? ` (${cleanNote})` : '';
-  addStatusLog(`${item.sub}: ${STATUS_LABELS[st]}${noteSuffix}`);
+  addStatusLog(`${item.sub} (${targetDateStr}): ${STATUS_LABELS[st]}${noteSuffix}`);
   recordImpactUpdate(st, item.id, item.course_id, item.sub);
 
   notifyEnrolledStudentsClassStatus(item, st, cleanNote);
@@ -522,6 +707,7 @@ app.post('/api/timetable/status', authenticate, requireRole('FACULTY', 'ADMIN'),
     status: st,
     statusLabel: STATUS_LABELS[st],
     note: cleanNote,
+    dateStr: targetDateStr,
     updatedBy: req.user.name,
     timestamp: now
   });
@@ -580,9 +766,11 @@ app.post('/api/timetable/reset', authenticate, requireRole('ADMIN'), (req, res) 
     SET st = 'ongoing', note = '', ts = ?
   `).run(now);
 
+  db.prepare('DELETE FROM daily_class_status').run();
   db.prepare('INSERT OR REPLACE INTO system_state (key, value) VALUES (?, ?)').run('notice', '');
   db.prepare('INSERT OR REPLACE INTO system_state (key, value) VALUES (?, ?)').run('demo_class_id', '2');
-  addStatusLog('Timetable statuses reset to Ongoing by Admin');
+  db.prepare('INSERT OR REPLACE INTO system_state (key, value) VALUES (?, ?)').run('simulated_time', '');
+  addStatusLog('Timetable statuses & simulated time reset by Admin');
 
   const updatedState = getFullTimetableState();
   io.emit('state:update', updatedState);
@@ -1628,235 +1816,21 @@ app.get('/api/student/dashboard-summary', authenticate, requireRole('STUDENT'), 
 });
 
 // ============================================================================
-// STUDENT CHAT ASSISTANT ("Ask ClassPulse" - Rule-Based)
 // ============================================================================
-app.post('/api/assistant', authenticate, requireRole('STUDENT'), (req, res) => {
-  const rawMsg = (req.body && req.body.message) ? String(req.body.message) : '';
-  const msg = rawMsg.toLowerCase().trim();
-
-  let reply = '';
-  let suggestions = [];
-
-  // Keywords lists for intent matching
-  const attendanceKeywords = ['attendance', 'short', '75', 'bunk'];
-  const assignmentKeywords = ['assignment', 'deadline', 'due', 'pending', 'todo'];
-  const marksKeywords = ['marks', 'grade', 'result', 'score'];
-  const eventKeywords = ['event', 'seat', 'register'];
-  const rightNowKeywords = ['right now', 'what should i do', 'class', 'today'];
-
-  if (attendanceKeywords.some(k => msg.includes(k))) {
-    // Intent 2: Attendance % per subject, flag < 75%, and consecutive classes needed
-    const courses = db.prepare(`
-      SELECT c.id, c.code, c.name, u.name as faculty_name
-      FROM courses c
-      JOIN enrollments e ON c.id = e.course_id
-      JOIN users u ON c.faculty_id = u.uid
-      WHERE e.student_id = ?
-    `).all(req.user.uid);
-
-    if (courses.length === 0) {
-      reply = "You are not enrolled in any courses yet.";
-    } else {
-      const summary = courses.map(c => {
-        const records = db.prepare(`
-          SELECT r.status
-          FROM attendance_records r
-          JOIN attendance_sessions s ON r.session_id = s.id
-          WHERE s.course_id = ? AND r.student_id = ?
-        `).all(c.id, req.user.uid);
-
-        const total = records.length;
-        const present = records.filter(r => r.status === 'Present' || r.status === 'Late').length;
-        const percentage = total > 0 ? Math.round((present / total) * 100) : 100;
-        let neededFor75 = 0;
-        if (percentage < 75 && total > 0) {
-          neededFor75 = Math.ceil((0.75 * total - present) / 0.25);
-        }
-        return {
-          code: c.code,
-          name: c.name,
-          total,
-          present,
-          percentage,
-          belowThreshold: percentage < 75 && total > 0,
-          neededFor75
-        };
-      });
-
-      const shortages = summary.filter(s => s.belowThreshold);
-      const lines = summary.map(s => {
-        if (s.belowThreshold) {
-          return `⚠️ **${s.name} (${s.code})**: **${s.percentage}%** (${s.present}/${s.total} attended)\n   🚨 **Shortage Alert!** You need **${s.neededFor75}** consecutive classes to reach 75%.`;
-        } else {
-          return `✅ **${s.name} (${s.code})**: **${s.percentage}%** (${s.present}/${s.total} attended)`;
-        }
-      });
-
-      const header = shortages.length > 0
-        ? `📊 **Attendance Summary (${shortages.length} Shortage Alert${shortages.length > 1 ? 's' : ''}):**\n\n`
-        : `📊 **Attendance Summary (All ≥ 75%):**\n\n`;
-
-      reply = header + lines.join('\n\n');
-    }
-
-    suggestions = [
-      "What should I do right now?",
-      "Pending assignments",
-      "Latest grades"
-    ];
-
-  } else if (assignmentKeywords.some(k => msg.includes(k))) {
-    // Intent 3: Pending assignments sorted by due date
-    const pending = db.prepare(`
-      SELECT a.id, a.title, a.due_date, a.max_points, c.code, c.name as course_name, s.status, c.id as course_id
-      FROM assignments a
-      JOIN courses c ON a.course_id = c.id
-      JOIN enrollments e ON c.id = e.course_id
-      LEFT JOIN submissions s ON a.id = s.assignment_id AND s.student_id = ?
-      WHERE e.student_id = ? AND (s.status IS NULL OR s.status = 'Assigned')
-      ORDER BY a.due_date ASC
-    `).all(req.user.uid, req.user.uid);
-
-    if (pending.length === 0) {
-      reply = "🎉 **All caught up!** You have no pending assignments due right now.";
-    } else {
-      const now = Date.now();
-      const list = pending.map((a, i) => {
-        const d = new Date(a.due_date);
-        const isOverdue = now > d.getTime();
-        const isSoon = !isOverdue && (d.getTime() - now) < (24 * 3600 * 1000);
-        const tag = isOverdue ? '🚨 Overdue' : isSoon ? '⏰ Due Soon' : '📝 Assigned';
-        const dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-        return `${i + 1}. **${a.title}** (${a.course_name} - ${a.code})\n   • Due: **${dateStr}** [${tag}]\n   • Max Points: ${a.max_points}`;
-      });
-      reply = `📝 **Pending Assignments (${pending.length}):**\n\n` + list.join('\n\n');
-    }
-
-    suggestions = [
-      "What should I do right now?",
-      "Check my attendance",
-      "Latest grades"
-    ];
-
-  } else if (marksKeywords.some(k => msg.includes(k))) {
-    // Intent 4: Latest grades
-    const publishedMarks = db.prepare(`
-      SELECT a.name, a.max_marks, m.score, c.code, c.name as course_name, a.created_at
-      FROM marks m
-      JOIN assessments a ON m.assessment_id = a.id
-      JOIN courses c ON a.course_id = c.id
-      JOIN enrollments e ON c.id = e.course_id
-      WHERE m.student_id = ? AND e.student_id = ? AND a.published = 1
-      ORDER BY a.created_at DESC, a.id DESC
-      LIMIT 10
-    `).all(req.user.uid, req.user.uid);
-
-    const gradedSubmissions = db.prepare(`
-      SELECT a.title as name, a.max_points as max_marks, s.points as score, c.code, c.name as course_name, s.graded_at as created_at, s.feedback
-      FROM submissions s
-      JOIN assignments a ON s.assignment_id = a.id
-      JOIN courses c ON a.course_id = c.id
-      WHERE s.student_id = ? AND s.status = 'Graded'
-      ORDER BY s.graded_at DESC
-      LIMIT 10
-    `).all(req.user.uid);
-
-    const allGrades = [
-      ...publishedMarks.map(m => ({ ...m, type: 'Assessment' })),
-      ...gradedSubmissions.map(s => ({ ...s, type: 'Assignment' }))
-    ].sort((a, b) => (b.created_at || 0) - (a.created_at || 0)).slice(0, 10);
-
-    if (allGrades.length === 0) {
-      reply = "📊 No published assessment marks or graded assignments found yet.";
-    } else {
-      const items = allGrades.map((g, i) => {
-        const pct = g.max_marks > 0 ? Math.round((g.score / g.max_marks) * 100) : 0;
-        const feedbackStr = g.feedback ? `\n   • Feedback: "${g.feedback}"` : '';
-        return `${i + 1}. **${g.name}** (${g.code})\n   • Type: ${g.type} | Score: **${g.score}/${g.max_marks}** (${pct}%)${feedbackStr}`;
-      });
-      reply = `📊 **Latest Grades & Results:**\n\n` + items.join('\n\n');
-    }
-
-    suggestions = [
-      "Check my attendance",
-      "Pending assignments",
-      "What should I do right now?"
-    ];
-
-  } else if (eventKeywords.some(k => msg.includes(k))) {
-    // Intent 5: Upcoming events with seats left
-    const now = Date.now();
-    const rows = db.prepare(`
-      SELECT * FROM events
-      WHERE status IN ('upcoming', 'live') AND end_ts >= ?
-      ORDER BY start_ts ASC
-    `).all(now);
-
-    const enriched = rows.map(r => enrichEventForUser(r, req.user.uid));
-    const withSeats = enriched.filter(e => e.seatsLeft === null || e.seatsLeft > 0);
-
-    if (withSeats.length === 0) {
-      reply = "🎟️ No upcoming events with open seats right now. Check back soon!";
-    } else {
-      const items = withSeats.slice(0, 5).map((e, i) => {
-        const dateStr = new Date(e.start_ts).toLocaleDateString([], {
-          weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-        });
-        const seatsStr = e.seatsLeft !== null ? `${e.seatsLeft} seat(s) left` : 'Unlimited seats';
-        const regStr = e.isRegistered ? ' • ✅ Registered' : '';
-        return `${i + 1}. **${e.title}** [${e.category}]\n   • 📍 Venue: ${e.venue} | ⏰ ${dateStr}\n   • 🎟️ Availability: **${seatsStr}**${regStr}`;
-      });
-      reply = `🎉 **Upcoming Events with Seats Left:**\n\n` + items.join('\n\n');
-    }
-
-    suggestions = [
-      "What should I do right now?",
-      "Check my attendance",
-      "Pending assignments"
-    ];
-
-  } else if (rightNowKeywords.some(k => msg.includes(k))) {
-    // Intent 1: Current class status & hero directive text (reuses directive logic)
-    const state = getFullTimetableState();
-    const { cls, mode, action } = getDirectiveSummary(state);
-
-    if (mode === 'finished') {
-      reply = `🎉 **DAY COMPLETE**: All scheduled classes have finished for today.\n\n📋 **Directive**: ${action.primary} ${action.secondary || ''}`;
-    } else if (!cls || mode === 'empty') {
-      reply = `📅 No active classes scheduled today.\n\n📋 **Directive**: ${action.primary}`;
-    } else {
-      const label = STATUS_LABELS[cls.st] || cls.st;
-      reply = `⏰ **Current Class: ${cls.sub}** (${cls.s} - ${cls.e})\n` +
-              `📍 **Room**: ${cls.room} | 👨‍🏫 **Faculty**: ${cls.fac}\n` +
-              `● **Status**: ${label}${cls.note ? ` ("${cls.note}")` : ''}\n\n` +
-              `📋 **Directive**: ${action.primary}\n` +
-              (action.secondary ? `${action.secondary}` : '');
-    }
-
-    suggestions = [
-      "Check my attendance",
-      "Pending assignments",
-      "Upcoming events"
-    ];
-
-  } else {
-    // Fallback: friendly message listing capabilities
-    reply = "Hi! I'm your **ClassPulse Assistant**. I can help you with:\n\n" +
-      "• ⏰ **Right now directive & class status** (e.g. \"What should I do right now?\", \"today's class\")\n" +
-      "• 📊 **Attendance shortage & percentage** (e.g. \"Check my attendance\", \"Do I have short attendance?\")\n" +
-      "• 📝 **Pending assignments & deadlines** (e.g. \"Pending assignments\", \"Upcoming due dates\")\n" +
-      "• 📈 **Latest grades & marks** (e.g. \"Show my grades\", \"Latest marks\")\n" +
-      "• 🎟️ **Campus events & seat availability** (e.g. \"Upcoming events with seats left\")\n\n" +
-      "How can I help you today?";
-
-    suggestions = [
-      "What should I do right now?",
-      "Check my attendance",
-      "Pending assignments"
-    ];
+// CHAT ASSISTANT ("Ask ClassPulse" - Rule-Based Engine + AI Fallback)
+// ============================================================================
+app.post('/api/assistant', authenticate, requireRole('STUDENT', 'FACULTY', 'ADMIN'), async (req, res) => {
+  try {
+    const response = await processAssistantMessage(req);
+    res.json(response);
+  } catch (err) {
+    console.error('Assistant error:', err);
+    res.status(500).json({
+      reply: 'An unexpected error occurred while processing your request.',
+      suggestions: ['What should I do right now?', 'Check my attendance', 'Pending assignments'],
+      source: 'Rules'
+    });
   }
-
-  res.json({ reply, suggestions });
 });
 
 // ============================================================================
@@ -2483,7 +2457,7 @@ app.get('/api/admin/roster', authenticate, requireRole('ADMIN'), (req, res) => {
 
 // POST /api/admin/roster (Add Single)
 app.post('/api/admin/roster', authenticate, requireRole('ADMIN'), (req, res) => {
-  const { uid, role, name, dept, section, is_organizer } = req.body;
+  const { uid, role, name, dept, section, is_organizer, phone } = req.body;
   if (!uid || !role || !name || !dept) {
     return res.status(400).json({ error: 'UID, Role, Name, and Dept are required' });
   }
@@ -2495,14 +2469,33 @@ app.post('/api/admin/roster', authenticate, requireRole('ADMIN'), (req, res) => 
   const cleanSec = sanitize(section || 'ALL', 20);
   const isOrg = is_organizer ? 1 : 0;
 
+  let normPhone = null;
+  if (phone && String(phone).trim() !== '') {
+    normPhone = normalizePhone(phone);
+    if (!normPhone) {
+      return res.status(400).json({ error: 'Invalid mobile number. Must be 10 digits starting with 6-9.' });
+    }
+    const existingRosterPhone = db.prepare('SELECT uid FROM roster WHERE phone = ?').get(normPhone);
+    if (existingRosterPhone && existingRosterPhone.uid !== cleanUid) {
+      return res.status(400).json({ error: `Phone number ${normPhone} is already registered to UID ${existingRosterPhone.uid}` });
+    }
+    const existingUserPhone = db.prepare('SELECT uid FROM users WHERE phone = ?').get(normPhone);
+    if (existingUserPhone && existingUserPhone.uid !== cleanUid) {
+      return res.status(400).json({ error: `Phone number ${normPhone} is already registered to user ${existingUserPhone.uid}` });
+    }
+  }
+
   try {
     db.prepare(`
-      INSERT INTO roster (uid, role, name, dept, section, registered, is_organizer)
-      VALUES (?, ?, ?, ?, ?, 0, ?)
-    `).run(cleanUid, cleanRole, cleanName, cleanDept, cleanSec, isOrg);
+      INSERT INTO roster (uid, role, name, dept, section, registered, is_organizer, phone)
+      VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(cleanUid, cleanRole, cleanName, cleanDept, cleanSec, isOrg, normPhone);
 
     res.json({ success: true, message: `Added ${cleanUid} to campus roster` });
   } catch (err) {
+    if (err.message && err.message.includes('UNIQUE constraint failed: roster.phone')) {
+      return res.status(400).json({ error: 'Phone number already registered to another member' });
+    }
     res.status(400).json({ error: 'UID already exists in roster' });
   }
 });
@@ -2522,26 +2515,95 @@ app.post('/api/admin/roster/import', authenticate, requireRole('ADMIN'), upload.
       return res.status(400).json({ error: 'CSV file is empty or missing headers' });
     }
 
+    const headerCols = lines[0].split(',').map(c => c.trim().toLowerCase().replace(/^["']|["']$/g, ''));
+    let phoneColIdx = headerCols.findIndex(h => h === 'phone' || h === 'mobile' || h === 'phone_number');
+    let uidIdx = headerCols.findIndex(h => h === 'uid' || h === 'id' || h === 'college_id');
+    let roleIdx = headerCols.findIndex(h => h === 'role');
+    let nameIdx = headerCols.findIndex(h => h === 'name' || h === 'fullname' || h === 'full name');
+    let deptIdx = headerCols.findIndex(h => h === 'dept' || h === 'department');
+    let secIdx = headerCols.findIndex(h => h === 'section' || h === 'sec');
+    let orgIdx = headerCols.findIndex(h => h === 'isorganizer' || h === 'is_organizer' || h === 'organizer');
+
+    if (uidIdx === -1) uidIdx = 0;
+    if (roleIdx === -1) roleIdx = 1;
+    if (nameIdx === -1) nameIdx = 2;
+    if (deptIdx === -1) deptIdx = 3;
+    if (secIdx === -1) secIdx = 4;
+    if (orgIdx === -1) orgIdx = 5;
+    if (phoneColIdx === -1 && headerCols.length > 6) phoneColIdx = 6;
+
     const insert = db.prepare(`
-      INSERT OR IGNORE INTO roster (uid, role, name, dept, section, registered, is_organizer)
-      VALUES (?, ?, ?, ?, ?, 0, ?)
+      INSERT INTO roster (uid, role, name, dept, section, registered, is_organizer, phone)
+      VALUES (?, ?, ?, ?, ?, 0, ?, ?)
     `);
 
     let importedCount = 0;
+    const rowErrors = [];
+    const seenPhonesInBatch = new Set();
+
     const importTx = db.transaction(() => {
       for (let i = 1; i < lines.length; i++) {
+        const lineNum = i + 1;
         const cols = lines[i].split(',').map(c => c.trim().replace(/^["']|["']$/g, ''));
-        if (cols.length >= 4) {
-          const [uid, role, name, dept, section, isOrg] = cols;
-          const cleanRole = ['STUDENT', 'FACULTY', 'ADMIN'].includes(role?.toUpperCase()) ? role.toUpperCase() : 'STUDENT';
-          insert.run(uid.toUpperCase(), cleanRole, name, dept, section || 'ALL', isOrg === '1' || isOrg === 'true' ? 1 : 0);
-          importedCount++;
+        if (cols.length < 4) {
+          rowErrors.push(`Row ${lineNum}: Missing required columns (needs at least UID, Role, Name, Dept)`);
+          continue;
         }
+
+        const rawUid = cols[uidIdx] || '';
+        const rawRole = cols[roleIdx] || 'STUDENT';
+        const rawName = cols[nameIdx] || '';
+        const rawDept = cols[deptIdx] || 'CSE';
+        const rawSec = (secIdx !== -1 && cols[secIdx]) ? cols[secIdx] : 'ALL';
+        const rawOrg = (orgIdx !== -1 && cols[orgIdx]) ? cols[orgIdx] : '0';
+        const rawPhone = (phoneColIdx !== -1 && cols[phoneColIdx]) ? cols[phoneColIdx] : '';
+
+        const cleanUid = rawUid.toUpperCase().trim();
+        if (!cleanUid) {
+          rowErrors.push(`Row ${lineNum}: Empty UID`);
+          continue;
+        }
+
+        const existingUid = db.prepare('SELECT uid FROM roster WHERE uid = ?').get(cleanUid);
+        if (existingUid) {
+          rowErrors.push(`Row ${lineNum}: UID ${cleanUid} already exists in roster`);
+          continue;
+        }
+
+        let normPhone = null;
+        if (rawPhone && rawPhone.trim() !== '') {
+          normPhone = normalizePhone(rawPhone);
+          if (!normPhone) {
+            rowErrors.push(`Row ${lineNum} (${cleanUid}): Invalid phone number "${rawPhone}". Must be 10 digits starting with 6-9.`);
+            continue;
+          }
+          if (seenPhonesInBatch.has(normPhone)) {
+            rowErrors.push(`Row ${lineNum} (${cleanUid}): Duplicate phone number "${rawPhone}" within CSV file.`);
+            continue;
+          }
+          const existingPhoneRoster = db.prepare('SELECT uid FROM roster WHERE phone = ?').get(normPhone);
+          if (existingPhoneRoster) {
+            rowErrors.push(`Row ${lineNum} (${cleanUid}): Phone number ${normPhone} already registered to UID ${existingPhoneRoster.uid}`);
+            continue;
+          }
+          const existingPhoneUsers = db.prepare('SELECT uid FROM users WHERE phone = ?').get(normPhone);
+          if (existingPhoneUsers) {
+            rowErrors.push(`Row ${lineNum} (${cleanUid}): Phone number ${normPhone} already registered to user ${existingPhoneUsers.uid}`);
+            continue;
+          }
+          seenPhonesInBatch.add(normPhone);
+        }
+
+        const cleanRole = ['STUDENT', 'FACULTY', 'ADMIN'].includes(rawRole.toUpperCase()) ? rawRole.toUpperCase() : 'STUDENT';
+        const isOrg = rawOrg === '1' || rawOrg === 'true' ? 1 : 0;
+
+        insert.run(cleanUid, cleanRole, rawName, rawDept, rawSec, isOrg, normPhone);
+        importedCount++;
       }
     });
 
     importTx();
-    res.json({ success: true, imported: importedCount });
+    res.json({ success: true, imported: importedCount, errors: rowErrors });
   } catch (err) {
     res.status(400).json({ error: `Import failed: ${err.message}` });
   }
@@ -2629,6 +2691,7 @@ app.post('/api/admin/enroll-section', authenticate, requireRole('ADMIN'), (req, 
   const enrollTx = db.transaction(() => {
     for (const s of students) {
       insert.run(course_id, s.uid);
+      addStudentToCourseChat(course_id, s.uid);
     }
   });
 
@@ -2849,8 +2912,858 @@ app.get('/api/files/:filename', authenticate, (req, res) => {
 });
 
 // ============================================================================
+// WHATSAPP-STYLE CHAT API ROUTES
+// ============================================================================
+function requireChatAccess(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Authentication required' });
+  if (req.user.role === 'ADMIN') {
+    return res.status(403).json({ error: 'Access denied: Admins have no access to chat' });
+  }
+  next();
+}
+
+const chatRateLimits = new Map();
+function checkChatRateLimit(uid) {
+  const now = Date.now();
+  const windowMs = 60 * 1000;
+  let timestamps = chatRateLimits.get(uid) || [];
+  timestamps = timestamps.filter(t => now - t < windowMs);
+  if (timestamps.length >= 20) {
+    chatRateLimits.set(uid, timestamps);
+    return false;
+  }
+  timestamps.push(now);
+  chatRateLimits.set(uid, timestamps);
+  return true;
+}
+
+// GET /api/chat/conversations
+app.get('/api/chat/conversations', authenticate, requireChatAccess, (req, res) => {
+  const uid = req.user.uid;
+  const convs = db.prepare(`
+    SELECT c.id, c.type, c.course_id, c.name, c.announce_only, c.created_at,
+           cm.last_read_ts
+    FROM conversations c
+    JOIN conversation_members cm ON c.id = cm.conversation_id
+    WHERE cm.uid = ?
+  `).all(uid);
+
+  const result = convs.map(conv => {
+    const lastMsg = db.prepare(`
+      SELECT m.id, m.sender_uid, u.name as sender_name, m.text, m.ts, m.deleted
+      FROM messages m
+      LEFT JOIN users u ON m.sender_uid = u.uid
+      WHERE m.conversation_id = ?
+      ORDER BY m.ts DESC, m.id DESC
+      LIMIT 1
+    `).get(conv.id);
+
+    const unreadRow = db.prepare(`
+      SELECT count(*) as count
+      FROM messages
+      WHERE conversation_id = ? AND ts > ? AND sender_uid != ?
+    `).get(conv.id, conv.last_read_ts || 0, uid);
+    const unread_count = unreadRow ? unreadRow.count : 0;
+
+    let other_user = null;
+    let other_last_read_ts = 0;
+    let displayName = conv.name;
+
+    if (conv.type === 'direct') {
+      const otherMember = db.prepare(`
+        SELECT u.uid, u.name, u.role, cm.last_read_ts
+        FROM conversation_members cm
+        JOIN users u ON cm.uid = u.uid
+        WHERE cm.conversation_id = ? AND cm.uid != ?
+      `).get(conv.id, uid);
+
+      if (otherMember) {
+        other_user = {
+          uid: otherMember.uid,
+          name: otherMember.name,
+          role: otherMember.role
+        };
+        other_last_read_ts = otherMember.last_read_ts || 0;
+        displayName = otherMember.name;
+      }
+    } else if (conv.type === 'group' && conv.course_id) {
+      const course = db.prepare('SELECT name, code FROM courses WHERE id = ?').get(conv.course_id);
+      if (course) {
+        displayName = `${course.name} (${conv.course_id})`;
+      }
+    }
+
+    const lastActivity = lastMsg ? lastMsg.ts : conv.created_at;
+    const memCountRow = db.prepare('SELECT count(*) as count FROM conversation_members WHERE conversation_id = ?').get(conv.id);
+
+    return {
+      id: conv.id,
+      type: conv.type,
+      course_id: conv.course_id,
+      name: displayName,
+      announce_only: conv.announce_only,
+      created_at: conv.created_at,
+      last_read_ts: conv.last_read_ts,
+      other_user,
+      other_last_read_ts,
+      member_count: memCountRow ? memCountRow.count : 0,
+      last_message: lastMsg ? {
+        id: lastMsg.id,
+        sender_uid: lastMsg.sender_uid,
+        sender_name: lastMsg.sender_name,
+        text: lastMsg.deleted ? 'This message was deleted' : lastMsg.text,
+        ts: lastMsg.ts,
+        deleted: lastMsg.deleted
+      } : null,
+      unread_count,
+      last_activity: lastActivity
+    };
+  });
+
+  result.sort((a, b) => b.last_activity - a.last_activity);
+  res.json({ conversations: result });
+});
+
+// GET /api/chat/eligible-contacts
+app.get('/api/chat/eligible-contacts', authenticate, requireChatAccess, (req, res) => {
+  const uid = req.user.uid;
+  const role = req.user.role;
+
+  if (role === 'STUDENT') {
+    const contacts = db.prepare(`
+      SELECT DISTINCT u.uid, u.name, u.role, c.id as course_id, c.name as course_name
+      FROM users u
+      JOIN courses c ON u.uid = c.faculty_id
+      JOIN enrollments e ON c.id = e.course_id
+      WHERE e.student_id = ?
+      ORDER BY u.name ASC
+    `).all(uid);
+    return res.json({ contacts });
+  }
+
+  if (role === 'FACULTY') {
+    const contacts = db.prepare(`
+      SELECT DISTINCT u.uid, u.name, u.role, c.id as course_id, c.name as course_name
+      FROM users u
+      JOIN enrollments e ON u.uid = e.student_id
+      JOIN courses c ON e.course_id = c.id
+      WHERE c.faculty_id = ?
+      ORDER BY u.name ASC
+    `).all(uid);
+    return res.json({ contacts });
+  }
+
+  res.json({ contacts: [] });
+});
+
+// Search rate limiter (10 per minute per user)
+const chatSearchRateLimits = new Map();
+function checkSearchRateLimit(uid) {
+  const now = Date.now();
+  const windowMs = 60 * 1000;
+  let timestamps = chatSearchRateLimits.get(uid) || [];
+  timestamps = timestamps.filter(t => now - t < windowMs);
+  if (timestamps.length >= 10) {
+    chatSearchRateLimits.set(uid, timestamps);
+    return false;
+  }
+  timestamps.push(now);
+  chatSearchRateLimits.set(uid, timestamps);
+  return true;
+}
+
+// GET /api/chat/search - Search classmate or faculty in allowed scope
+app.get('/api/chat/search', authenticate, requireChatAccess, (req, res) => {
+  const uid = req.user.uid;
+  if (!checkSearchRateLimit(uid)) {
+    return res.status(429).json({ error: 'Search rate limit exceeded (maximum 10 searches per minute).' });
+  }
+
+  const q = String(req.query.q || '').trim();
+  if (!q) {
+    return res.json({ results: [] });
+  }
+
+  const normPhone = normalizePhone(q);
+  const qLower = q.toLowerCase();
+
+  let results = [];
+  if (req.user.role === 'STUDENT') {
+    // Scope: Classmates in the same section OR student's own faculty
+    // NEVER expose phone numbers! Exclude blocked users.
+    const classmates = db.prepare(`
+      SELECT u.uid, u.name, u.role, u.section, u.phone
+      FROM users u
+      WHERE u.role = 'STUDENT'
+        AND u.section = ?
+        AND u.uid != ?
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b
+          WHERE (b.uid = ? AND b.blocked_uid = u.uid) OR (b.uid = u.uid AND b.blocked_uid = ?)
+        )
+    `).all(req.user.section, uid, uid, uid);
+
+    const faculty = db.prepare(`
+      SELECT DISTINCT u.uid, u.name, u.role, u.section, u.phone
+      FROM users u
+      JOIN courses c ON u.uid = c.faculty_id
+      JOIN enrollments e ON c.id = e.course_id
+      WHERE e.student_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b
+          WHERE (b.uid = ? AND b.blocked_uid = u.uid) OR (b.uid = u.uid AND b.blocked_uid = ?)
+        )
+    `).all(uid, uid, uid);
+
+    const pool = [...classmates, ...faculty];
+    results = pool.filter(u => {
+      if (normPhone && u.phone === normPhone) return true;
+      if (u.uid.toLowerCase() === qLower || u.uid.toLowerCase().startsWith(qLower)) return true;
+      if (u.name.toLowerCase().includes(qLower)) return true;
+      return false;
+    });
+  } else if (req.user.role === 'FACULTY') {
+    // Scope: Students enrolled in faculty's courses
+    const students = db.prepare(`
+      SELECT DISTINCT u.uid, u.name, u.role, u.section, u.phone
+      FROM users u
+      JOIN enrollments e ON u.uid = e.student_id
+      JOIN courses c ON e.course_id = c.id
+      WHERE c.faculty_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b
+          WHERE (b.uid = ? AND b.blocked_uid = u.uid) OR (b.uid = u.uid AND b.blocked_uid = ?)
+        )
+    `).all(uid, uid, uid);
+
+    results = students.filter(u => {
+      if (normPhone && u.phone === normPhone) return true;
+      if (u.uid.toLowerCase() === qLower || u.uid.toLowerCase().startsWith(qLower)) return true;
+      if (u.name.toLowerCase().includes(qLower)) return true;
+      return false;
+    });
+  }
+
+  // Sanitize results: ONLY return name, section, uid, role. NEVER return phone!
+  const sanitized = results.map(u => {
+    let request_status = 'none';
+    let can_direct_chat = false;
+
+    if (req.user.role === 'STUDENT' && u.role === 'STUDENT') {
+      const reqRow = db.prepare(`
+        SELECT from_uid, to_uid, status FROM chat_requests
+        WHERE (from_uid = ? AND to_uid = ?) OR (from_uid = ? AND to_uid = ?)
+      `).get(uid, u.uid, u.uid, uid);
+
+      if (reqRow) {
+        if (reqRow.status === 'accepted') {
+          request_status = 'accepted';
+          can_direct_chat = true;
+        } else if (reqRow.status === 'pending') {
+          request_status = reqRow.from_uid === uid ? 'pending_sent' : 'pending_received';
+        } else {
+          request_status = 'declined';
+        }
+      }
+    } else {
+      can_direct_chat = canDirectChat(uid, u.uid);
+    }
+
+    return {
+      uid: u.uid,
+      name: u.name,
+      role: u.role,
+      section: u.section,
+      request_status,
+      can_direct_chat
+    };
+  });
+
+  res.json({ results: sanitized });
+});
+
+// GET /api/chat/:id/messages
+app.get('/api/chat/:id/messages', authenticate, requireChatAccess, (req, res) => {
+  const convId = parseInt(req.params.id, 10);
+  if (isNaN(convId)) return res.status(400).json({ error: 'Invalid conversation ID' });
+
+  const member = db.prepare('SELECT 1 FROM conversation_members WHERE conversation_id = ? AND uid = ?').get(convId, req.user.uid);
+  if (!member) {
+    return res.status(403).json({ error: 'Access denied: You are not a member of this conversation' });
+  }
+
+  const conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(convId);
+  if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+  const memCountRow = db.prepare('SELECT count(*) as count FROM conversation_members WHERE conversation_id = ?').get(convId);
+  conv.member_count = memCountRow ? memCountRow.count : 0;
+
+  let other_last_read_ts = 0;
+  if (conv.type === 'direct') {
+    const otherMember = db.prepare('SELECT last_read_ts FROM conversation_members WHERE conversation_id = ? AND uid != ?').get(convId, req.user.uid);
+    if (otherMember) other_last_read_ts = otherMember.last_read_ts || 0;
+  }
+
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 30, 1), 50);
+  const before = req.query.before ? parseInt(req.query.before, 10) : null;
+
+  let query = `
+    SELECT m.id, m.conversation_id, m.sender_uid, u.name as sender_name, m.text, m.ts, m.deleted
+    FROM messages m
+    LEFT JOIN users u ON m.sender_uid = u.uid
+    WHERE m.conversation_id = ?
+  `;
+  const params = [convId];
+
+  if (before && !isNaN(before)) {
+    query += ' AND m.ts < ?';
+    params.push(before);
+  }
+
+  query += ` ORDER BY m.ts DESC, m.id DESC LIMIT ${limit + 1}`;
+
+  const rows = db.prepare(query).all(...params);
+  const has_more = rows.length > limit;
+  const sliced = has_more ? rows.slice(0, limit) : rows;
+
+  const messages = sliced.map(m => ({
+    id: m.id,
+    conversation_id: m.conversation_id,
+    sender_uid: m.sender_uid,
+    sender_name: m.sender_name,
+    text: m.deleted ? 'This message was deleted' : m.text,
+    ts: m.ts,
+    deleted: m.deleted
+  })).reverse();
+
+  res.json({
+    conversation: conv,
+    messages,
+    has_more,
+    other_last_read_ts
+  });
+});
+
+// POST /api/chat/:id/messages
+app.post('/api/chat/:id/messages', authenticate, requireChatAccess, (req, res) => {
+  const convId = parseInt(req.params.id, 10);
+  if (isNaN(convId)) return res.status(400).json({ error: 'Invalid conversation ID' });
+
+  if (!checkChatRateLimit(req.user.uid)) {
+    return res.status(429).json({ error: 'Rate limit exceeded. Maximum 20 messages per minute.' });
+  }
+
+  const member = db.prepare('SELECT 1 FROM conversation_members WHERE conversation_id = ? AND uid = ?').get(convId, req.user.uid);
+  if (!member) {
+    return res.status(403).json({ error: 'Access denied: You are not a member of this conversation' });
+  }
+
+  const conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(convId);
+  if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+
+  if (conv.type === 'direct') {
+    const otherMember = db.prepare('SELECT uid FROM conversation_members WHERE conversation_id = ? AND uid != ?').get(convId, req.user.uid);
+    if (otherMember && isUserBlocked(req.user.uid, otherMember.uid)) {
+      return res.status(403).json({ error: 'Cannot send message: You or the recipient have blocked each other' });
+    }
+  }
+
+  if (conv.announce_only === 1 && req.user.role !== 'FACULTY') {
+    return res.status(403).json({ error: 'This group is set to announcements only. Only faculty can post.' });
+  }
+
+  const rawText = req.body.text;
+  if (typeof rawText !== 'string') {
+    return res.status(400).json({ error: 'Message text is required' });
+  }
+  const text = rawText.trim();
+  if (text.length < 1 || text.length > 1000) {
+    return res.status(400).json({ error: 'Message text must be between 1 and 1000 characters' });
+  }
+
+  const now = Date.now();
+  const insertResult = db.prepare(`
+    INSERT INTO messages (conversation_id, sender_uid, text, ts, deleted)
+    VALUES (?, ?, ?, ?, 0)
+  `).run(convId, req.user.uid, text, now);
+
+  const msgId = insertResult.lastInsertRowid;
+  db.prepare('UPDATE conversation_members SET last_read_ts = ? WHERE conversation_id = ? AND uid = ?').run(now, convId, req.user.uid);
+
+  const newMsg = {
+    id: msgId,
+    conversation_id: convId,
+    sender_uid: req.user.uid,
+    sender_name: req.user.name,
+    text,
+    ts: now,
+    deleted: 0
+  };
+
+  io.to(`chat:${convId}`).emit('message:new', newMsg);
+
+  const otherMembers = db.prepare('SELECT uid FROM conversation_members WHERE conversation_id = ? AND uid != ?').all(convId, req.user.uid);
+  const insertNotif = db.prepare(`
+    INSERT INTO notifications (uid, title, message, link, is_read, created_ts, type, course_id)
+    VALUES (?, ?, ?, ?, 0, ?, 'chat', ?)
+  `);
+
+  for (const om of otherMembers) {
+    try {
+      insertNotif.run(
+        om.uid,
+        `💬 ${req.user.name}`,
+        text.length > 60 ? text.substring(0, 57) + '...' : text,
+        `#chat?id=${convId}`,
+        now,
+        conv.course_id || null
+      );
+      io.to(`user:${om.uid}`).emit('notification:new', {
+        title: `💬 ${req.user.name}`,
+        message: text.length > 60 ? text.substring(0, 57) + '...' : text,
+        link: `#chat?id=${convId}`
+      });
+    } catch (e) {}
+  }
+
+  res.status(201).json({ message: newMsg });
+});
+
+// DELETE /api/chat/messages/:id
+app.delete('/api/chat/messages/:id', authenticate, requireChatAccess, (req, res) => {
+  const msgId = parseInt(req.params.id, 10);
+  if (isNaN(msgId)) return res.status(400).json({ error: 'Invalid message ID' });
+
+  const msg = db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId);
+  if (!msg) return res.status(404).json({ error: 'Message not found' });
+
+  const conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(msg.conversation_id);
+  if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+
+  let canDelete = false;
+  if (msg.sender_uid === req.user.uid) {
+    canDelete = true;
+  } else if (req.user.role === 'FACULTY' && conv.type === 'group' && conv.course_id) {
+    const isTeacher = db.prepare('SELECT 1 FROM courses WHERE id = ? AND faculty_id = ?').get(conv.course_id, req.user.uid);
+    if (isTeacher) canDelete = true;
+  }
+
+  if (!canDelete) {
+    return res.status(403).json({ error: 'Access denied: You can only delete your own messages or messages in course groups you teach' });
+  }
+
+  db.prepare("UPDATE messages SET deleted = 1, text = 'This message was deleted' WHERE id = ?").run(msgId);
+
+  io.to(`chat:${msg.conversation_id}`).emit('message:deleted', {
+    id: msgId,
+    conversation_id: msg.conversation_id,
+    text: 'This message was deleted'
+  });
+
+  res.json({ success: true, id: msgId });
+});
+
+// POST /api/chat/requests - Send chat request to a classmate
+app.post('/api/chat/requests', authenticate, requireChatAccess, (req, res) => {
+  const fromUid = req.user.uid;
+  const toUid = req.body.to_uid;
+
+  if (!toUid || toUid === fromUid) {
+    return res.status(400).json({ error: 'Invalid target user ID' });
+  }
+
+  if (isUserBlocked(fromUid, toUid)) {
+    return res.status(403).json({ error: 'Cannot send request to this user' });
+  }
+
+  const target = db.prepare('SELECT uid, role, section, name FROM users WHERE uid = ?').get(toUid);
+  if (!target || target.role !== 'STUDENT') {
+    return res.status(403).json({ error: 'Chat requests can only be sent to students' });
+  }
+
+  if (req.user.role !== 'STUDENT' || req.user.section !== target.section) {
+    return res.status(403).json({ error: 'Chat requests can only be sent to classmates in the same section' });
+  }
+
+  const existing = db.prepare(`
+    SELECT * FROM chat_requests
+    WHERE (from_uid = ? AND to_uid = ?) OR (from_uid = ? AND to_uid = ?)
+  `).get(fromUid, toUid, toUid, fromUid);
+
+  const now = Date.now();
+  let reqId;
+
+  if (existing) {
+    if (existing.status === 'accepted') {
+      return res.status(400).json({ error: 'You are already connected with this classmate' });
+    }
+    if (existing.status === 'pending') {
+      return res.status(400).json({ error: 'A chat request is already pending between you' });
+    }
+    db.prepare("UPDATE chat_requests SET from_uid = ?, to_uid = ?, status = 'pending', created_at = ? WHERE id = ?").run(fromUid, toUid, now, existing.id);
+    reqId = existing.id;
+  } else {
+    const r = db.prepare("INSERT INTO chat_requests (from_uid, to_uid, status, created_at) VALUES (?, ?, 'pending', ?)").run(fromUid, toUid, now);
+    reqId = r.lastInsertRowid;
+  }
+
+  try {
+    db.prepare(`
+      INSERT INTO notifications (uid, title, message, link, is_read, created_ts, type)
+      VALUES (?, ?, ?, ?, 0, ?, 'chat')
+    `).run(toUid, `💬 Chat Request from ${req.user.name}`, `${req.user.name} wants to connect with you on chat.`, '#chat', now);
+
+    io.to(`user:${toUid}`).emit('notification:new', {
+      title: `💬 Chat Request from ${req.user.name}`,
+      message: `${req.user.name} wants to connect with you on chat.`,
+      link: '#chat'
+    });
+    io.to(`user:${toUid}`).emit('chat:request', {
+      id: reqId,
+      from_uid: fromUid,
+      from_name: req.user.name,
+      from_section: req.user.section
+    });
+  } catch (e) {}
+
+  res.status(201).json({ success: true, message: 'Chat request sent', id: reqId });
+});
+
+// GET /api/chat/requests - List pending incoming and outgoing requests
+app.get('/api/chat/requests', authenticate, requireChatAccess, (req, res) => {
+  const uid = req.user.uid;
+  const incoming = db.prepare(`
+    SELECT r.id, r.from_uid, r.to_uid, r.status, r.created_at,
+           u.name as from_name, u.section as from_section
+    FROM chat_requests r
+    JOIN users u ON r.from_uid = u.uid
+    WHERE r.to_uid = ? AND r.status = 'pending'
+    ORDER BY r.created_at DESC
+  `).all(uid);
+
+  const outgoing = db.prepare(`
+    SELECT r.id, r.from_uid, r.to_uid, r.status, r.created_at,
+           u.name as to_name, u.section as to_section
+    FROM chat_requests r
+    JOIN users u ON r.to_uid = u.uid
+    WHERE r.from_uid = ? AND r.status = 'pending'
+    ORDER BY r.created_at DESC
+  `).all(uid);
+
+  res.json({ incoming, outgoing });
+});
+
+// POST /api/chat/requests/:id/accept
+app.post('/api/chat/requests/:id/accept', authenticate, requireChatAccess, (req, res) => {
+  const reqId = parseInt(req.params.id, 10);
+  const r = db.prepare('SELECT * FROM chat_requests WHERE id = ?').get(reqId);
+  if (!r) return res.status(404).json({ error: 'Request not found' });
+  if (r.to_uid !== req.user.uid) return res.status(403).json({ error: 'Access denied: You are not the recipient of this request' });
+  if (r.status !== 'pending') return res.status(400).json({ error: 'Request is no longer pending' });
+
+  db.prepare("UPDATE chat_requests SET status = 'accepted' WHERE id = ?").run(reqId);
+
+  let conv = db.prepare(`
+    SELECT c.id FROM conversations c
+    JOIN conversation_members cm1 ON c.id = cm1.conversation_id
+    JOIN conversation_members cm2 ON c.id = cm2.conversation_id
+    WHERE c.type = 'direct' AND cm1.uid = ? AND cm2.uid = ?
+  `).get(r.from_uid, r.to_uid);
+
+  let convId;
+  const now = Date.now();
+  if (conv) {
+    convId = conv.id;
+  } else {
+    const insertConv = db.prepare("INSERT INTO conversations (type, course_id, name, announce_only, created_at) VALUES ('direct', null, null, 0, ?)");
+    const insertMember = db.prepare("INSERT OR IGNORE INTO conversation_members (conversation_id, uid, last_read_ts) VALUES (?, ?, ?)");
+    const cr = insertConv.run(now);
+    convId = cr.lastInsertRowid;
+    insertMember.run(convId, r.from_uid, now);
+    insertMember.run(convId, r.to_uid, now);
+  }
+
+  try {
+    io.in(`user:${r.from_uid}`).socketsJoin(`chat:${convId}`);
+    io.in(`user:${r.to_uid}`).socketsJoin(`chat:${convId}`);
+
+    db.prepare(`
+      INSERT INTO notifications (uid, title, message, link, is_read, created_ts, type)
+      VALUES (?, ?, ?, ?, 0, ?, 'chat')
+    `).run(r.from_uid, `💬 Chat Request Accepted`, `${req.user.name} accepted your chat request!`, `#chat?id=${convId}`, now);
+
+    io.to(`user:${r.from_uid}`).emit('notification:new', {
+      title: `💬 Chat Request Accepted`,
+      message: `${req.user.name} accepted your chat request!`,
+      link: `#chat?id=${convId}`
+    });
+    io.to(`user:${r.from_uid}`).emit('chat:request_accepted', {
+      conversation_id: convId,
+      accepted_by_uid: req.user.uid,
+      accepted_by_name: req.user.name
+    });
+  } catch (e) {}
+
+  res.json({ success: true, conversation_id: convId });
+});
+
+// POST /api/chat/requests/:id/decline
+app.post('/api/chat/requests/:id/decline', authenticate, requireChatAccess, (req, res) => {
+  const reqId = parseInt(req.params.id, 10);
+  const r = db.prepare('SELECT * FROM chat_requests WHERE id = ?').get(reqId);
+  if (!r) return res.status(404).json({ error: 'Request not found' });
+  if (r.to_uid !== req.user.uid) return res.status(403).json({ error: 'Access denied: You are not the recipient of this request' });
+
+  db.prepare("UPDATE chat_requests SET status = 'declined' WHERE id = ?").run(reqId);
+  res.json({ success: true, message: 'Request declined' });
+});
+
+// POST /api/chat/block
+app.post('/api/chat/block', authenticate, requireChatAccess, (req, res) => {
+  const targetUid = req.body.uid || req.body.target_uid;
+  if (!targetUid || targetUid === req.user.uid) {
+    return res.status(400).json({ error: 'Invalid user to block' });
+  }
+
+  const target = db.prepare('SELECT uid, name FROM users WHERE uid = ?').get(targetUid);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+
+  db.prepare('INSERT OR IGNORE INTO blocks (uid, blocked_uid, created_at) VALUES (?, ?, ?)').run(req.user.uid, targetUid, Date.now());
+  res.json({ success: true, message: `Blocked ${target.name}` });
+});
+
+// POST /api/chat/unblock
+app.post('/api/chat/unblock', authenticate, requireChatAccess, (req, res) => {
+  const targetUid = req.body.uid || req.body.target_uid;
+  if (!targetUid) return res.status(400).json({ error: 'Invalid user to unblock' });
+
+  db.prepare('DELETE FROM blocks WHERE uid = ? AND blocked_uid = ?').run(req.user.uid, targetUid);
+  res.json({ success: true, message: 'User unblocked' });
+});
+
+// GET /api/chat/blocked
+app.get('/api/chat/blocked', authenticate, requireChatAccess, (req, res) => {
+  const blocked = db.prepare(`
+    SELECT b.blocked_uid as uid, u.name, u.role, u.section
+    FROM blocks b
+    JOIN users u ON b.blocked_uid = u.uid
+    WHERE b.uid = ?
+  `).all(req.user.uid);
+  res.json({ blocked });
+});
+
+// POST /api/chat/report - Report an inappropriate message
+app.post('/api/chat/report', authenticate, requireChatAccess, (req, res) => {
+  const messageId = parseInt(req.body.message_id, 10);
+  const reason = String(req.body.reason || 'Inappropriate content').trim();
+  if (isNaN(messageId)) return res.status(400).json({ error: 'Invalid message ID' });
+
+  const msg = db.prepare('SELECT * FROM messages WHERE id = ?').get(messageId);
+  if (!msg) return res.status(404).json({ error: 'Message not found' });
+
+  const member = db.prepare('SELECT 1 FROM conversation_members WHERE conversation_id = ? AND uid = ?').get(msg.conversation_id, req.user.uid);
+  if (!member) {
+    return res.status(403).json({ error: 'You must be a member of this conversation to report a message' });
+  }
+
+  const now = Date.now();
+  const r = db.prepare(`
+    INSERT INTO reports (message_id, reporter_uid, reason, ts)
+    VALUES (?, ?, ?, ?)
+  `).run(messageId, req.user.uid, reason, now);
+
+  res.json({ success: true, report_id: r.lastInsertRowid, message: 'Message reported to administrators' });
+});
+
+// GET /api/admin/chat/reports (Admin only - ADMIN can read ONLY reported messages, never other chats!)
+app.get('/api/admin/chat/reports', authenticate, requireRole('ADMIN'), (req, res) => {
+  const reports = db.prepare(`
+    SELECT r.id as report_id, r.reason, r.ts as reported_at,
+           m.id as message_id, m.conversation_id, m.text as message_text, m.ts as message_ts, m.deleted as message_deleted,
+           su.uid as sender_uid, su.name as sender_name, su.role as sender_role,
+           ru.uid as reporter_uid, ru.name as reporter_name, ru.role as reporter_role,
+           c.type as conversation_type, c.name as conversation_name, c.course_id
+    FROM reports r
+    JOIN messages m ON r.message_id = m.id
+    LEFT JOIN users su ON m.sender_uid = su.uid
+    LEFT JOIN users ru ON r.reporter_uid = ru.uid
+    LEFT JOIN conversations c ON m.conversation_id = c.id
+    ORDER BY r.ts DESC
+  `).all();
+
+  res.json({ reports });
+});
+
+// POST /api/chat/groups - Faculty creates custom group with students in their courses
+app.post('/api/chat/groups', authenticate, requireChatAccess, (req, res) => {
+  if (req.user.role !== 'FACULTY') {
+    return res.status(403).json({ error: 'Only faculty members can create custom groups' });
+  }
+
+  const name = String(req.body.name || '').trim();
+  if (!name || name.length > 60) {
+    return res.status(400).json({ error: 'Group name is required (max 60 characters)' });
+  }
+
+  const studentUids = Array.isArray(req.body.student_uids) ? req.body.student_uids : (Array.isArray(req.body.member_uids) ? req.body.member_uids : []);
+  if (studentUids.length === 0) {
+    return res.status(400).json({ error: 'Please select at least one student' });
+  }
+
+  for (const sUid of studentUids) {
+    const enrolled = db.prepare(`
+      SELECT 1 FROM enrollments e
+      JOIN courses c ON e.course_id = c.id
+      WHERE c.faculty_id = ? AND e.student_id = ?
+      LIMIT 1
+    `).get(req.user.uid, sUid);
+
+    if (!enrolled) {
+      return res.status(403).json({ error: `Student ${sUid} is not enrolled in any of your courses` });
+    }
+  }
+
+  const now = Date.now();
+  const insertConv = db.prepare("INSERT INTO conversations (type, course_id, name, announce_only, created_by, created_at) VALUES ('group', null, ?, 0, ?, ?)");
+  const insertMember = db.prepare("INSERT OR IGNORE INTO conversation_members (conversation_id, uid, last_read_ts) VALUES (?, ?, ?)");
+
+  const createTx = db.transaction(() => {
+    const r = insertConv.run(name, req.user.uid, now);
+    const convId = r.lastInsertRowid;
+    insertMember.run(convId, req.user.uid, now);
+    for (const sUid of studentUids) {
+      insertMember.run(convId, sUid, now);
+    }
+    return convId;
+  });
+
+  const convId = createTx();
+
+  try {
+    io.in(`user:${req.user.uid}`).socketsJoin(`chat:${convId}`);
+    for (const sUid of studentUids) {
+      io.in(`user:${sUid}`).socketsJoin(`chat:${convId}`);
+    }
+  } catch (e) {}
+
+  res.status(201).json({ success: true, id: convId, name });
+});
+
+// POST /api/chat/:id/read
+app.post('/api/chat/:id/read', authenticate, requireChatAccess, (req, res) => {
+  const convId = parseInt(req.params.id, 10);
+  if (isNaN(convId)) return res.status(400).json({ error: 'Invalid conversation ID' });
+
+  const member = db.prepare('SELECT 1 FROM conversation_members WHERE conversation_id = ? AND uid = ?').get(convId, req.user.uid);
+  if (!member) {
+    return res.status(403).json({ error: 'Access denied: You are not a member of this conversation' });
+  }
+
+  const now = Date.now();
+  db.prepare('UPDATE conversation_members SET last_read_ts = ? WHERE conversation_id = ? AND uid = ?').run(now, convId, req.user.uid);
+
+  io.to(`chat:${convId}`).emit('conversation:read', {
+    conversation_id: convId,
+    uid: req.user.uid,
+    last_read_ts: now
+  });
+
+  res.json({ success: true, last_read_ts: now });
+});
+
+// POST /api/chat/direct
+app.post('/api/chat/direct', authenticate, requireChatAccess, (req, res) => {
+  const targetUid = req.body.uid;
+  if (!targetUid) return res.status(400).json({ error: 'Target user ID is required' });
+
+  if (!canDirectChat(req.user.uid, targetUid)) {
+    return res.status(403).json({ error: 'Direct messaging is not permitted between these users' });
+  }
+
+  const existing = db.prepare(`
+    SELECT c.id FROM conversations c
+    JOIN conversation_members cm1 ON c.id = cm1.conversation_id
+    JOIN conversation_members cm2 ON c.id = cm2.conversation_id
+    WHERE c.type = 'direct' AND cm1.uid = ? AND cm2.uid = ?
+  `).get(req.user.uid, targetUid);
+
+  if (existing) {
+    return res.json({ id: existing.id, isNew: false });
+  }
+
+  const now = Date.now();
+  const insertConv = db.prepare("INSERT INTO conversations (type, course_id, name, announce_only, created_at) VALUES ('direct', null, null, 0, ?)");
+  const insertMember = db.prepare("INSERT INTO conversation_members (conversation_id, uid, last_read_ts) VALUES (?, ?, ?)");
+
+  const createTx = db.transaction(() => {
+    const r = insertConv.run(now);
+    const convId = r.lastInsertRowid;
+    insertMember.run(convId, req.user.uid, now);
+    insertMember.run(convId, targetUid, now);
+    return convId;
+  });
+
+  const convId = createTx();
+
+  try {
+    io.in(`user:${req.user.uid}`).socketsJoin(`chat:${convId}`);
+    io.in(`user:${targetUid}`).socketsJoin(`chat:${convId}`);
+  } catch (e) {}
+
+  res.json({ id: convId, isNew: true });
+});
+
+// POST /api/chat/:id/settings
+app.post('/api/chat/:id/settings', authenticate, requireChatAccess, (req, res) => {
+  const convId = parseInt(req.params.id, 10);
+  if (isNaN(convId)) return res.status(400).json({ error: 'Invalid conversation ID' });
+
+  const conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(convId);
+  if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+
+  if (conv.type !== 'group') {
+    return res.status(400).json({ error: 'Announcements only setting only applies to group chats' });
+  }
+
+  if (req.user.role !== 'FACULTY') {
+    return res.status(403).json({ error: 'Only faculty can change group settings' });
+  }
+
+  const member = db.prepare('SELECT 1 FROM conversation_members WHERE conversation_id = ? AND uid = ?').get(convId, req.user.uid);
+  if (!member) {
+    return res.status(403).json({ error: 'Access denied: You are not a faculty member of this group' });
+  }
+
+  const announce_only = req.body.announce_only ? 1 : 0;
+  db.prepare('UPDATE conversations SET announce_only = ? WHERE id = ?').run(announce_only, convId);
+
+  io.to(`chat:${convId}`).emit('conversation:updated', {
+    id: convId,
+    announce_only
+  });
+
+  res.json({ success: true, announce_only });
+});
+
+// GET /api/chat/:id/presence
+app.get('/api/chat/:id/presence', authenticate, requireChatAccess, (req, res) => {
+  const convId = parseInt(req.params.id, 10);
+  const conv = db.prepare('SELECT type FROM conversations WHERE id = ?').get(convId);
+  if (!conv || conv.type !== 'direct') return res.json({ online: false, last_seen: null });
+
+  const other = db.prepare('SELECT uid FROM conversation_members WHERE conversation_id = ? AND uid != ?').get(convId, req.user.uid);
+  if (!other) return res.json({ online: false, last_seen: null });
+
+  const isOnline = onlineChatUsers.has(other.uid) && onlineChatUsers.get(other.uid).size > 0;
+  const lastSeen = userLastSeen.get(other.uid) || null;
+  res.json({ online: isOnline, last_seen: lastSeen });
+});
+
+// ============================================================================
 // SOCKET.IO REAL-TIME CONNECTION
 // ============================================================================
+const onlineChatUsers = new Map();
+const userLastSeen = new Map();
+
 function userFromSocket(socket) {
   try {
     const header = socket.handshake.headers.cookie || '';
@@ -2881,6 +3794,73 @@ io.on('connection', (socket) => {
   if (socketUser) {
     socket.join(`user:${socketUser.uid}`);
     socket.join(`role:${socketUser.role}`);
+
+    // Chat rooms, presence, and typing (Non-admins only)
+    if (socketUser.role !== 'ADMIN') {
+      if (!onlineChatUsers.has(socketUser.uid)) {
+        onlineChatUsers.set(socketUser.uid, new Set());
+      }
+      onlineChatUsers.get(socketUser.uid).add(socket.id);
+
+      const myConvs = db.prepare('SELECT conversation_id FROM conversation_members WHERE uid = ?').all(socketUser.uid);
+      for (const r of myConvs) {
+        socket.join(`chat:${r.conversation_id}`);
+        socket.to(`chat:${r.conversation_id}`).emit('presence:update', {
+          uid: socketUser.uid,
+          online: true
+        });
+      }
+
+      socket.on('chat:join', ({ conversationId }) => {
+        const cId = parseInt(conversationId, 10);
+        if (!cId) return;
+        const mem = db.prepare('SELECT 1 FROM conversation_members WHERE conversation_id = ? AND uid = ?').get(cId, socketUser.uid);
+        if (mem) {
+          socket.join(`chat:${cId}`);
+        }
+      });
+
+      socket.on('typing:start', ({ conversationId }) => {
+        const cId = parseInt(conversationId, 10);
+        if (!cId) return;
+        const mem = db.prepare('SELECT 1 FROM conversation_members WHERE conversation_id = ? AND uid = ?').get(cId, socketUser.uid);
+        if (mem) {
+          socket.to(`chat:${cId}`).emit('typing:start', {
+            conversationId: cId,
+            uid: socketUser.uid,
+            name: socketUser.name
+          });
+        }
+      });
+
+      socket.on('typing:stop', ({ conversationId }) => {
+        const cId = parseInt(conversationId, 10);
+        if (!cId) return;
+        socket.to(`chat:${cId}`).emit('typing:stop', {
+          conversationId: cId,
+          uid: socketUser.uid
+        });
+      });
+
+      socket.on('disconnect', () => {
+        const set = onlineChatUsers.get(socketUser.uid);
+        if (set) {
+          set.delete(socket.id);
+          if (set.size === 0) {
+            onlineChatUsers.delete(socketUser.uid);
+            const now = Date.now();
+            userLastSeen.set(socketUser.uid, now);
+            for (const r of myConvs) {
+              io.to(`chat:${r.conversation_id}`).emit('presence:update', {
+                uid: socketUser.uid,
+                online: false,
+                last_seen: now
+              });
+            }
+          }
+        }
+      });
+    }
   }
 
   socket.on('joinUser', ({ uid, role }) => {
@@ -3509,7 +4489,7 @@ app.get('/demo', (req, res) => {
 
     res.send(html);
   } catch (err) {
-    res.redirect('/#login');
+    res.redirect('/app#login');
   }
 });
 

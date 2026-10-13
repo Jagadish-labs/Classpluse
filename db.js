@@ -23,7 +23,8 @@ function initSchema() {
       dept TEXT NOT NULL,
       section TEXT NOT NULL,
       registered INTEGER DEFAULT 0,
-      is_organizer INTEGER DEFAULT 0
+      is_organizer INTEGER DEFAULT 0,
+      phone TEXT
     );
 
     CREATE TABLE IF NOT EXISTS users (
@@ -35,6 +36,7 @@ function initSchema() {
       password_hash TEXT NOT NULL,
       must_change_pass INTEGER DEFAULT 0,
       is_organizer INTEGER DEFAULT 0,
+      phone TEXT,
       created_at INTEGER NOT NULL,
       FOREIGN KEY (uid) REFERENCES roster(uid) ON DELETE CASCADE
     );
@@ -59,6 +61,7 @@ function initSchema() {
 
     CREATE TABLE IF NOT EXISTS timetable (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      day INTEGER DEFAULT 1,
       course_id TEXT,
       s TEXT NOT NULL,
       e TEXT NOT NULL,
@@ -69,6 +72,16 @@ function initSchema() {
       st TEXT DEFAULT 'ongoing',
       note TEXT DEFAULT '',
       ts INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS daily_class_status (
+      slot_id INTEGER NOT NULL,
+      date_str TEXT NOT NULL,
+      st TEXT NOT NULL DEFAULT 'ongoing',
+      note TEXT DEFAULT '',
+      ts INTEGER NOT NULL,
+      PRIMARY KEY (slot_id, date_str),
+      FOREIGN KEY (slot_id) REFERENCES timetable(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS system_state (
@@ -263,16 +276,150 @@ function initSchema() {
       FOREIGN KEY (student_id) REFERENCES users(uid) ON DELETE CASCADE,
       FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
     );
+
+    -- ========================================================================
+    -- WHATSAPP-STYLE CHAT TABLES
+    -- ========================================================================
+    CREATE TABLE IF NOT EXISTS conversations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      course_id TEXT,
+      name TEXT,
+      announce_only INTEGER DEFAULT 0,
+      created_by TEXT,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS conversation_members (
+      conversation_id INTEGER NOT NULL,
+      uid TEXT NOT NULL,
+      last_read_ts INTEGER DEFAULT 0,
+      PRIMARY KEY (conversation_id, uid),
+      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+      FOREIGN KEY (uid) REFERENCES users(uid) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id INTEGER NOT NULL,
+      sender_uid TEXT NOT NULL,
+      text TEXT NOT NULL,
+      ts INTEGER NOT NULL,
+      deleted INTEGER DEFAULT 0,
+      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+      FOREIGN KEY (sender_uid) REFERENCES users(uid) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      from_uid TEXT NOT NULL,
+      to_uid TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (from_uid) REFERENCES users(uid) ON DELETE CASCADE,
+      FOREIGN KEY (to_uid) REFERENCES users(uid) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS blocks (
+      uid TEXT NOT NULL,
+      blocked_uid TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (uid, blocked_uid),
+      FOREIGN KEY (uid) REFERENCES users(uid) ON DELETE CASCADE,
+      FOREIGN KEY (blocked_uid) REFERENCES users(uid) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id INTEGER NOT NULL,
+      reporter_uid TEXT NOT NULL,
+      reason TEXT,
+      ts INTEGER NOT NULL,
+      FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+      FOREIGN KEY (reporter_uid) REFERENCES users(uid) ON DELETE CASCADE
+    );
   `);
 
   try { db.exec('ALTER TABLE roster ADD COLUMN is_organizer INTEGER DEFAULT 0'); } catch(e) {}
   try { db.exec('ALTER TABLE users ADD COLUMN is_organizer INTEGER DEFAULT 0'); } catch(e) {}
+  try { db.exec('ALTER TABLE roster ADD COLUMN phone TEXT'); } catch(e) {}
+  try { db.exec('ALTER TABLE users ADD COLUMN phone TEXT'); } catch(e) {}
+  try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_roster_phone ON roster(phone) WHERE phone IS NOT NULL'); } catch(e) {}
+  try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users(phone) WHERE phone IS NOT NULL'); } catch(e) {}
+  try { db.exec('ALTER TABLE conversations ADD COLUMN created_by TEXT'); } catch(e) {}
+  try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_requests_pair ON chat_requests(from_uid, to_uid)'); } catch(e) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_chat_requests_to ON chat_requests(to_uid, status)'); } catch(e) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_reports_msg ON reports(message_id)'); } catch(e) {}
   try { db.exec('ALTER TABLE notifications ADD COLUMN type TEXT'); } catch(e) {}
   try { db.exec('ALTER TABLE notifications ADD COLUMN course_id TEXT'); } catch(e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_notifications_uid_isread ON notifications(uid, is_read)'); } catch(e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_notifications_uid_type ON notifications(uid, type, course_id)'); } catch(e) {}
   try { db.exec('CREATE TABLE IF NOT EXISTS faculty_reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, faculty_id TEXT NOT NULL, student_id TEXT NOT NULL, course_id TEXT NOT NULL, sent_at INTEGER NOT NULL)'); } catch(e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_faculty_reminders_lookup ON faculty_reminders (student_id, course_id, sent_at)'); } catch(e) {}
+  try { db.exec('ALTER TABLE timetable ADD COLUMN day INTEGER DEFAULT 1'); } catch(e) {}
+}
+
+const defaultTimetable = [
+  // --- MONDAY (day: 1) ---
+  { id: 1, day: 1, course_id: 'CS101', s: '09:00', e: '09:50', sub: 'Data Structures', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'B-204', st: 'ongoing', note: '' },
+  { id: 2, day: 1, course_id: 'CS102', s: '09:50', e: '10:40', sub: 'Data Communications', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-206', st: 'ongoing', note: '' },
+  { id: 3, day: 1, course_id: 'CS103', s: '10:55', e: '11:45', sub: 'UI/UX Design', fac: 'Ms. Kavya', faculty_id: 'FAC003', room: 'Design Lab', st: 'ongoing', note: '' },
+  { id: 4, day: 1, course_id: 'CS104', s: '11:45', e: '12:35', sub: 'Software Development', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'C-101', st: 'ongoing', note: '' },
+  { id: 5, day: 1, course_id: 'CS105', s: '13:30', e: '14:20', sub: 'Computer Networks', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-210', st: 'ongoing', note: '' },
+  { id: 6, day: 1, course_id: 'CS101', s: '14:20', e: '15:10', sub: 'Data Structures Lab', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'Lab 2', st: 'ongoing', note: '' },
+
+  // --- TUESDAY (day: 2) ---
+  { id: 7, day: 2, course_id: 'CS104', s: '09:00', e: '09:50', sub: 'Software Development', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'C-101', st: 'ongoing', note: '' },
+  { id: 8, day: 2, course_id: 'CS101', s: '09:50', e: '10:40', sub: 'Data Structures', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'B-204', st: 'ongoing', note: '' },
+  { id: 9, day: 2, course_id: 'CS102', s: '10:55', e: '11:45', sub: 'Data Communications', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-206', st: 'ongoing', note: '' },
+  { id: 10, day: 2, course_id: 'CS105', s: '11:45', e: '12:35', sub: 'Computer Networks', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-210', st: 'ongoing', note: '' },
+  { id: 11, day: 2, course_id: 'CS103', s: '13:30', e: '14:20', sub: 'UI/UX Design', fac: 'Ms. Kavya', faculty_id: 'FAC003', room: 'Design Lab', st: 'ongoing', note: '' },
+  { id: 12, day: 2, course_id: 'CS102', s: '14:20', e: '15:10', sub: 'Data Comm Lab', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'Net Lab', st: 'ongoing', note: '' },
+
+  // --- WEDNESDAY (day: 3) ---
+  { id: 13, day: 3, course_id: 'CS103', s: '09:00', e: '09:50', sub: 'UI/UX Design', fac: 'Ms. Kavya', faculty_id: 'FAC003', room: 'Design Lab', st: 'ongoing', note: '' },
+  { id: 14, day: 3, course_id: 'CS105', s: '09:50', e: '10:40', sub: 'Computer Networks', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-210', st: 'ongoing', note: '' },
+  { id: 15, day: 3, course_id: 'CS101', s: '10:55', e: '11:45', sub: 'Data Structures', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'B-204', st: 'ongoing', note: '' },
+  { id: 16, day: 3, course_id: 'CS104', s: '11:45', e: '12:35', sub: 'Software Development', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'C-101', st: 'ongoing', note: '' },
+  { id: 17, day: 3, course_id: 'CS102', s: '13:30', e: '14:20', sub: 'Data Communications', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-206', st: 'ongoing', note: '' },
+  { id: 18, day: 3, course_id: 'CS103', s: '14:20', e: '15:10', sub: 'UI/UX Studio', fac: 'Ms. Kavya', faculty_id: 'FAC003', room: 'Design Lab', st: 'ongoing', note: '' },
+
+  // --- THURSDAY (day: 4) ---
+  { id: 19, day: 4, course_id: 'CS102', s: '09:00', e: '09:50', sub: 'Data Communications', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-206', st: 'ongoing', note: '' },
+  { id: 20, day: 4, course_id: 'CS104', s: '09:50', e: '10:40', sub: 'Software Development', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'C-101', st: 'ongoing', note: '' },
+  { id: 21, day: 4, course_id: 'CS105', s: '10:55', e: '11:45', sub: 'Computer Networks', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-210', st: 'ongoing', note: '' },
+  { id: 22, day: 4, course_id: 'CS103', s: '11:45', e: '12:35', sub: 'UI/UX Design', fac: 'Ms. Kavya', faculty_id: 'FAC003', room: 'Design Lab', st: 'ongoing', note: '' },
+  { id: 23, day: 4, course_id: 'CS101', s: '13:30', e: '14:20', sub: 'Data Structures', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'B-204', st: 'ongoing', note: '' },
+  { id: 24, day: 4, course_id: 'CS104', s: '14:20', e: '15:10', sub: 'Software Dev Workshop', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'C-101', st: 'ongoing', note: '' },
+
+  // --- FRIDAY (day: 5) ---
+  { id: 25, day: 5, course_id: 'CS105', s: '09:00', e: '09:50', sub: 'Computer Networks', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-210', st: 'ongoing', note: '' },
+  { id: 26, day: 5, course_id: 'CS103', s: '09:50', e: '10:40', sub: 'UI/UX Design', fac: 'Ms. Kavya', faculty_id: 'FAC003', room: 'Design Lab', st: 'ongoing', note: '' },
+  { id: 27, day: 5, course_id: 'CS104', s: '10:55', e: '11:45', sub: 'Software Development', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'C-101', st: 'ongoing', note: '' },
+  { id: 28, day: 5, course_id: 'CS101', s: '11:45', e: '12:35', sub: 'Data Structures', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'B-204', st: 'ongoing', note: '' },
+  { id: 29, day: 5, course_id: 'CS102', s: '13:30', e: '14:20', sub: 'Data Communications', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-206', st: 'ongoing', note: '' },
+
+  // --- SATURDAY (day: 6) ---
+  { id: 30, day: 6, course_id: 'CS101', s: '09:00', e: '09:50', sub: 'Data Structures', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'B-204', st: 'ongoing', note: '' },
+  { id: 31, day: 6, course_id: 'CS102', s: '09:50', e: '10:40', sub: 'Data Communications', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-206', st: 'ongoing', note: '' },
+  { id: 32, day: 6, course_id: 'CS104', s: '10:55', e: '11:45', sub: 'Software Development', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'C-101', st: 'ongoing', note: '' },
+  { id: 33, day: 6, course_id: 'CS105', s: '11:45', e: '12:35', sub: 'Computer Networks', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-210', st: 'ongoing', note: '' }
+];
+
+function seedWeeklyTimetable() {
+  const count = db.prepare('SELECT count(*) as count FROM timetable').get().count;
+  if (count < 30) {
+    db.exec('DELETE FROM timetable');
+    try { db.exec("DELETE FROM sqlite_sequence WHERE name = 'timetable'"); } catch(e) {}
+    const insertTimetable = db.prepare(`
+      INSERT INTO timetable (id, day, course_id, s, e, sub, fac, faculty_id, room, st, note, ts)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const now = Date.now();
+    for (const t of defaultTimetable) {
+      insertTimetable.run(t.id, t.day, t.course_id, t.s, t.e, t.sub, t.fac, t.faculty_id, t.room, t.st, t.note, now);
+    }
+  }
 }
 
 function seedDatabase(force = false) {
@@ -281,6 +428,9 @@ function seedDatabase(force = false) {
     seedNotificationsIfEmpty();
     seedEventsIfEmpty();
     seedImpactIfEmpty();
+    seedWeeklyTimetable();
+    initCourseChatGroups();
+    seedChatData(false);
     return;
   }
 
@@ -293,6 +443,13 @@ function seedDatabase(force = false) {
     // Clear existing if force
     if (force) {
       db.exec(`
+      DELETE FROM reports;
+      DELETE FROM blocks;
+      DELETE FROM chat_requests;
+      DELETE FROM messages;
+      DELETE FROM conversation_members;
+      DELETE FROM conversations;
+      DELETE FROM daily_class_status;
       DELETE FROM faculty_reminders;
       DELETE FROM impact_updates;
       DELETE FROM notifications;
@@ -322,55 +479,55 @@ function seedDatabase(force = false) {
   console.log('🌱 Seeding ClassPulse Database...');
 
   const insertRoster = db.prepare(`
-    INSERT INTO roster (uid, role, name, dept, section, registered, is_organizer)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO roster (uid, role, name, dept, section, registered, is_organizer, phone)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const insertUser = db.prepare(`
-    INSERT INTO users (uid, role, name, dept, section, password_hash, must_change_pass, is_organizer, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO users (uid, role, name, dept, section, password_hash, must_change_pass, is_organizer, phone, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   // 1. ADMIN
-  insertRoster.run('ADMIN001', 'ADMIN', 'System Administrator', 'CSE', 'ALL', 1, 1);
-  insertUser.run('ADMIN001', 'ADMIN', 'System Administrator', 'CSE', 'ALL', adminPassHash, 0, 1, now);
+  insertRoster.run('ADMIN001', 'ADMIN', 'System Administrator', 'CSE', 'ALL', 1, 1, '+919900000001');
+  insertUser.run('ADMIN001', 'ADMIN', 'System Administrator', 'CSE', 'ALL', adminPassHash, 0, 1, '+919900000001', now);
 
   // 2. FACULTY
   const facultyMembers = [
-    { uid: 'FAC001', name: 'Prof. Rao', dept: 'CSE' },
-    { uid: 'FAC002', name: 'Dr. Meena', dept: 'CSE' },
-    { uid: 'FAC003', name: 'Ms. Kavya', dept: 'CSE' }
+    { uid: 'FAC001', name: 'Prof. Rao', dept: 'CSE', phone: '+919100000001' },
+    { uid: 'FAC002', name: 'Dr. Meena', dept: 'CSE', phone: '+919100000002' },
+    { uid: 'FAC003', name: 'Ms. Kavya', dept: 'CSE', phone: '+919100000003' }
   ];
 
   for (const fac of facultyMembers) {
-    insertRoster.run(fac.uid, 'FACULTY', fac.name, fac.dept, 'CSE', 1, 1);
-    insertUser.run(fac.uid, 'FACULTY', fac.name, fac.dept, 'CSE', facPassHash, 0, 1, now);
+    insertRoster.run(fac.uid, 'FACULTY', fac.name, fac.dept, 'CSE', 1, 1, fac.phone);
+    insertUser.run(fac.uid, 'FACULTY', fac.name, fac.dept, 'CSE', facPassHash, 0, 1, fac.phone, now);
   }
 
   // 3. REGISTERED STUDENTS (STU001 to STU012)
   const students = [
-    { uid: 'STU001', name: 'Aarav Sharma', is_org: 1 }, // Lead Student Organiser
-    { uid: 'STU002', name: 'Ananya Iyer', is_org: 0 },
-    { uid: 'STU003', name: 'Rohan Verma', is_org: 0 },
-    { uid: 'STU004', name: 'Priya Patel', is_org: 0 },
-    { uid: 'STU005', name: 'Siddharth Nair', is_org: 0 },
-    { uid: 'STU006', name: 'Sneha Reddy', is_org: 0 },
-    { uid: 'STU007', name: 'Vikram Malhotra', is_org: 0 },
-    { uid: 'STU008', name: 'Divya Krishnan', is_org: 0 },
-    { uid: 'STU009', name: 'Rahul Gupta', is_org: 0 },
-    { uid: 'STU010', name: 'Pooja Joshi', is_org: 0 },
-    { uid: 'STU011', name: 'Aditya Deshmukh', is_org: 0 },
-    { uid: 'STU012', name: 'Meera Sen', is_org: 0 }
+    { uid: 'STU001', name: 'Aarav Sharma', is_org: 1, phone: '+919000000001' }, // Lead Student Organiser
+    { uid: 'STU002', name: 'Ananya Iyer', is_org: 0, phone: '+919000000002' },
+    { uid: 'STU003', name: 'Rohan Verma', is_org: 0, phone: '+919000000003' },
+    { uid: 'STU004', name: 'Priya Patel', is_org: 0, phone: '+919000000004' },
+    { uid: 'STU005', name: 'Siddharth Nair', is_org: 0, phone: '+919000000005' },
+    { uid: 'STU006', name: 'Sneha Reddy', is_org: 0, phone: '+919000000006' },
+    { uid: 'STU007', name: 'Vikram Malhotra', is_org: 0, phone: '+919000000007' },
+    { uid: 'STU008', name: 'Divya Krishnan', is_org: 0, phone: '+919000000008' },
+    { uid: 'STU009', name: 'Rahul Gupta', is_org: 0, phone: '+919000000009' },
+    { uid: 'STU010', name: 'Pooja Joshi', is_org: 0, phone: '+919000000010' },
+    { uid: 'STU011', name: 'Aditya Deshmukh', is_org: 0, phone: '+919000000011' },
+    { uid: 'STU012', name: 'Meera Sen', is_org: 0, phone: '+919000000012' }
   ];
 
   for (const stu of students) {
-    insertRoster.run(stu.uid, 'STUDENT', stu.name, 'CSE', 'CSE-A', 1, stu.is_org);
-    insertUser.run(stu.uid, 'STUDENT', stu.name, 'CSE', 'CSE-A', stuPassHash, 0, stu.is_org, now);
+    insertRoster.run(stu.uid, 'STUDENT', stu.name, 'CSE', 'CSE-A', 1, stu.is_org, stu.phone);
+    insertUser.run(stu.uid, 'STUDENT', stu.name, 'CSE', 'CSE-A', stuPassHash, 0, stu.is_org, stu.phone, now);
   }
 
   // 4. UNREGISTERED ROSTER ENTRIES FOR SIGNUP DEMO
-  insertRoster.run('STU101', 'STUDENT', 'Demo Student', 'CSE', 'CSE-A', 0, 0);
-  insertRoster.run('FAC101', 'FACULTY', 'Demo Faculty', 'CSE', 'CSE', 0, 0);
+  insertRoster.run('STU101', 'STUDENT', 'Demo Student', 'CSE', 'CSE-A', 0, 0, '+919000000101');
+  insertRoster.run('FAC101', 'FACULTY', 'Demo Faculty', 'CSE', 'CSE', 0, 0, '+919100000101');
 
   // 5. COURSES
   const insertCourse = db.prepare(`
@@ -402,24 +559,15 @@ function seedDatabase(force = false) {
     }
   }
 
-  // 7. TIMETABLE FOR TODAY
+  // 7. TIMETABLE (WEEKLY MON-SAT)
   try { db.exec("DELETE FROM sqlite_sequence WHERE name = 'timetable'"); } catch(e) {}
   const insertTimetable = db.prepare(`
-    INSERT INTO timetable (id, course_id, s, e, sub, fac, faculty_id, room, st, note, ts)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO timetable (id, day, course_id, s, e, sub, fac, faculty_id, room, st, note, ts)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-  const defaultTimetable = [
-    { id: 1, course_id: 'CS101', s: '09:00', e: '09:50', sub: 'Data Structures', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'B-204', st: 'ongoing', note: '', ts: now },
-    { id: 2, course_id: 'CS102', s: '09:50', e: '10:40', sub: 'Data Communications', fac: 'Dr. Meena', faculty_id: 'FAC002', room: 'B-206', st: 'ongoing', note: '', ts: now },
-    { id: 3, course_id: 'CS103', s: '10:55', e: '11:45', sub: 'UI/UX Design', fac: 'Ms. Kavya', faculty_id: 'FAC003', room: 'Design Lab', st: 'ongoing', note: '', ts: now },
-    { id: 4, course_id: 'CS104', s: '11:45', e: '12:35', sub: 'Software Development', fac: 'Prof. Nair', faculty_id: 'FAC001', room: 'C-101', st: 'ongoing', note: '', ts: now },
-    { id: 5, course_id: 'CS105', s: '13:30', e: '14:20', sub: 'Computer Networks', fac: 'Dr. Suresh', faculty_id: 'FAC002', room: 'B-210', st: 'ongoing', note: '', ts: now },
-    { id: 6, course_id: 'CS101', s: '14:20', e: '15:10', sub: 'Data Structures Lab', fac: 'Prof. Rao', faculty_id: 'FAC001', room: 'Lab 2', st: 'ongoing', note: '', ts: now }
-  ];
-
   for (const t of defaultTimetable) {
-    insertTimetable.run(t.id, t.course_id, t.s, t.e, t.sub, t.fac, t.faculty_id, t.room, t.st, t.note, t.ts);
+    insertTimetable.run(t.id, t.day, t.course_id, t.s, t.e, t.sub, t.fac, t.faculty_id, t.room, t.st, t.note, now);
   }
 
   // 8. SYSTEM STATE
@@ -615,6 +763,9 @@ function seedDatabase(force = false) {
   });
 
   runSeedTx();
+
+  initCourseChatGroups();
+  seedChatData(force);
 
   console.log('✅ ClassPulse Database successfully initialized and seeded!');
 }
@@ -1118,6 +1269,176 @@ function getImpactMetrics() {
   };
 }
 
+function initCourseChatGroups() {
+  const courses = db.prepare('SELECT id, name, faculty_id FROM courses').all();
+  const getConv = db.prepare("SELECT id FROM conversations WHERE type = 'group' AND course_id = ?");
+  const createConv = db.prepare("INSERT INTO conversations (type, course_id, name, announce_only, created_at) VALUES ('group', ?, ?, 0, ?)");
+  const addMember = db.prepare("INSERT OR IGNORE INTO conversation_members (conversation_id, uid, last_read_ts) VALUES (?, ?, ?)");
+  const getEnrollments = db.prepare("SELECT student_id FROM enrollments WHERE course_id = ?");
+
+  const now = Date.now();
+  for (const c of courses) {
+    let conv = getConv.get(c.id);
+    let convId;
+    if (!conv) {
+      const res = createConv.run(c.id, c.name, now);
+      convId = res.lastInsertRowid;
+    } else {
+      convId = conv.id;
+    }
+
+    if (c.faculty_id) {
+      addMember.run(convId, c.faculty_id, now);
+    }
+    const enrollments = getEnrollments.all(c.id);
+    for (const e of enrollments) {
+      addMember.run(convId, e.student_id, now);
+    }
+  }
+}
+
+function addStudentToCourseChat(courseId, studentUid) {
+  const conv = db.prepare("SELECT id FROM conversations WHERE type = 'group' AND course_id = ?").get(courseId);
+  if (conv) {
+    db.prepare("INSERT OR IGNORE INTO conversation_members (conversation_id, uid, last_read_ts) VALUES (?, ?, ?)").run(conv.id, studentUid, Date.now());
+  }
+}
+
+function isUserBlocked(uidA, uidB) {
+  if (!uidA || !uidB) return false;
+  const row = db.prepare('SELECT 1 FROM blocks WHERE (uid = ? AND blocked_uid = ?) OR (uid = ? AND blocked_uid = ?)').get(uidA, uidB, uidB, uidA);
+  return !!row;
+}
+
+function canDirectChat(uidA, uidB) {
+  if (!uidA || !uidB || uidA === uidB) return false;
+  if (isUserBlocked(uidA, uidB)) return false;
+
+  const userA = db.prepare('SELECT uid, role, section FROM users WHERE uid = ?').get(uidA);
+  const userB = db.prepare('SELECT uid, role, section FROM users WHERE uid = ?').get(uidB);
+  if (!userA || !userB) return false;
+  if (userA.role === 'ADMIN' || userB.role === 'ADMIN') return false;
+
+  // Student and Faculty
+  if ((userA.role === 'STUDENT' && userB.role === 'FACULTY') || (userA.role === 'FACULTY' && userB.role === 'STUDENT')) {
+    const studentUid = userA.role === 'STUDENT' ? userA.uid : userB.uid;
+    const facultyUid = userA.role === 'FACULTY' ? userA.uid : userB.uid;
+    const pair = db.prepare(`
+      SELECT 1 FROM enrollments e
+      JOIN courses c ON e.course_id = c.id
+      WHERE e.student_id = ? AND c.faculty_id = ?
+      LIMIT 1
+    `).get(studentUid, facultyUid);
+    return !!pair;
+  }
+
+  // Student and Student: only classmates in the same section, and only after the other student accepts a chat request
+  if (userA.role === 'STUDENT' && userB.role === 'STUDENT') {
+    if (!userA.section || !userB.section || userA.section !== userB.section) return false;
+    const acceptedReq = db.prepare(`
+      SELECT 1 FROM chat_requests
+      WHERE ((from_uid = ? AND to_uid = ?) OR (from_uid = ? AND to_uid = ?)) AND status = 'accepted'
+    `).get(uidA, uidB, uidB, uidA);
+    return !!acceptedReq;
+  }
+
+  return false;
+}
+
+function seedChatData(force = false) {
+  const now = Date.now();
+  const pendingReq = db.prepare("SELECT 1 FROM chat_requests WHERE from_uid = 'STU002' AND to_uid = 'STU003' AND status = 'pending'").get();
+  if (!pendingReq || force) {
+    if (force) db.exec('DELETE FROM chat_requests');
+    else db.prepare("DELETE FROM chat_requests WHERE (from_uid = 'STU002' AND to_uid = 'STU003') OR (from_uid = 'STU003' AND to_uid = 'STU002')").run();
+    db.prepare(`
+      INSERT INTO chat_requests (from_uid, to_uid, status, created_at)
+      VALUES (?, ?, 'pending', ?)
+    `).run('STU002', 'STU003', now - 3600 * 1000);
+  }
+
+  const msgCount = db.prepare('SELECT count(*) as count FROM messages').get().count;
+  if (msgCount > 0 && !force) return;
+
+  if (force) {
+    db.exec('DELETE FROM reports');
+    db.exec('DELETE FROM blocks');
+    db.exec('DELETE FROM messages');
+    db.exec("DELETE FROM conversation_members WHERE conversation_id IN (SELECT id FROM conversations WHERE type = 'direct')");
+    db.exec("DELETE FROM conversations WHERE type = 'direct'");
+  }
+
+  const insertConv = db.prepare("INSERT INTO conversations (type, course_id, name, announce_only, created_at) VALUES (?, ?, ?, ?, ?)");
+  const insertMember = db.prepare("INSERT OR IGNORE INTO conversation_members (conversation_id, uid, last_read_ts) VALUES (?, ?, ?)");
+  const insertMsg = db.prepare("INSERT INTO messages (conversation_id, sender_uid, text, ts, deleted) VALUES (?, ?, ?, ?, ?)");
+
+  // Direct conversation between STU001 and FAC001
+  let directConv = db.prepare(`
+    SELECT c.id FROM conversations c
+    JOIN conversation_members cm1 ON c.id = cm1.conversation_id
+    JOIN conversation_members cm2 ON c.id = cm2.conversation_id
+    WHERE c.type = 'direct' AND cm1.uid = 'STU001' AND cm2.uid = 'FAC001'
+  `).get();
+
+  let directConvId;
+  if (!directConv) {
+    const res = insertConv.run('direct', null, null, 0, now - 2 * 3600 * 1000);
+    directConvId = res.lastInsertRowid;
+    insertMember.run(directConvId, 'STU001', now);
+    insertMember.run(directConvId, 'FAC001', now);
+  } else {
+    directConvId = directConv.id;
+  }
+
+  // Seed messages for direct chat
+  const directMessages = [
+    { sender: 'STU001', text: 'Good afternoon Prof. Rao, I had a doubt regarding binary search tree balancing from Assignment 1.', offset: 90 * 60 * 1000 },
+    { sender: 'FAC001', text: 'Hello Aarav. Are you looking into AVL tree rotations or Red-Black trees?', offset: 70 * 60 * 1000 },
+    { sender: 'STU001', text: 'Specifically left-right double rotations in AVL trees.', offset: 50 * 60 * 1000 },
+    { sender: 'FAC001', text: 'Check slide 28 of Module 2. Remember that an LR imbalance requires a left rotation on the child followed by a right rotation on the root.', offset: 30 * 60 * 1000 },
+    { sender: 'STU001', text: 'Understood, that makes total sense now! Thank you sir.', offset: 10 * 60 * 1000 }
+  ];
+
+  for (const m of directMessages) {
+    insertMsg.run(directConvId, m.sender, m.text, now - m.offset, 0);
+  }
+
+  // Seed a pending chat request between two classmates (STU002 -> STU003)
+  db.prepare(`
+    INSERT OR IGNORE INTO chat_requests (from_uid, to_uid, status, created_at)
+    VALUES (?, ?, 'pending', ?)
+  `).run('STU002', 'STU003', now - 3600 * 1000);
+
+  // Seed messages for course groups
+  const courses = db.prepare('SELECT id, name, faculty_id FROM courses').all();
+  for (const c of courses) {
+    const grp = db.prepare("SELECT id FROM conversations WHERE type = 'group' AND course_id = ?").get(c.id);
+    if (!grp) continue;
+    const convId = grp.id;
+
+    if (c.id === 'CS101') {
+      insertMsg.run(convId, c.faculty_id, 'Welcome to Data Structures! Feel free to post your questions about labs and coursework here.', now - 5 * 3600 * 1000, 0);
+      insertMsg.run(convId, 'STU001', 'Thank you Professor! Will the lab code templates be uploaded today?', now - 4 * 3600 * 1000, 0);
+      insertMsg.run(convId, c.faculty_id, 'Yes Aarav, the starter files are already available under Course Materials.', now - 3 * 3600 * 1000, 0);
+      insertMsg.run(convId, 'STU002', 'Found them, thank you!', now - 2 * 3600 * 1000, 0);
+    } else if (c.id === 'CS102') {
+      insertMsg.run(convId, c.faculty_id, 'Reminder: Packet Tracer simulation topology submission is due this Friday.', now - 6 * 3600 * 1000, 0);
+      insertMsg.run(convId, 'STU003', 'Dr. Meena, should we include routing tables in the report?', now - 3 * 3600 * 1000, 0);
+      insertMsg.run(convId, c.faculty_id, 'Yes Rohan, please include screenshot proofs with routing tables.', now - 2 * 3600 * 1000, 0);
+    } else if (c.id === 'CS103') {
+      insertMsg.run(convId, c.faculty_id, 'Awesome progress on the Figma wireframes in today’s session everyone! Keep up the creative work.', now - 4 * 3600 * 1000, 0);
+      insertMsg.run(convId, 'STU004', 'Thank you Ms. Kavya! Can we use auto-layout for mobile views?', now - 2 * 3600 * 1000, 0);
+      insertMsg.run(convId, c.faculty_id, 'Absolutely Priya, auto-layout is highly recommended.', now - 1 * 3600 * 1000, 0);
+    } else if (c.id === 'CS104') {
+      insertMsg.run(convId, c.faculty_id, 'Please review the software requirements specification (SRS) template before tomorrow’s lab.', now - 8 * 3600 * 1000, 0);
+    } else if (c.id === 'CS105') {
+      insertMsg.run(convId, c.faculty_id, 'Subnetting practice exercises are now live. Try solving exercises 1 to 5.', now - 7 * 3600 * 1000, 0);
+      insertMsg.run(convId, 'STU005', 'Is CIDR notation required for all solutions?', now - 3 * 3600 * 1000, 0);
+      insertMsg.run(convId, c.faculty_id, 'Yes Siddharth, provide slash notation for all subnets.', now - 2 * 3600 * 1000, 0);
+    }
+  }
+}
+
 function ensureSignupDemoRoster() {
   const insert = db.prepare(`
     INSERT OR IGNORE INTO roster (uid, role, name, dept, section, registered, is_organizer)
@@ -1138,5 +1459,10 @@ module.exports = {
   seedDatabase,
   seedImpactIfEmpty,
   recordImpactUpdate,
-  getImpactMetrics
+  getImpactMetrics,
+  initCourseChatGroups,
+  addStudentToCourseChat,
+  canDirectChat,
+  isUserBlocked,
+  seedChatData
 };

@@ -1,8 +1,8 @@
-const CACHE_NAME = 'classpulse-shell-v3';
+const CACHE_NAME = 'classpulse-shell-v11';
 
 const APP_SHELL = [
-  '/',
   '/index.html',
+  '/landing.html',
   '/app.js',
   '/styles.css',
   '/manifest.webmanifest',
@@ -116,14 +116,17 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Navigation requests: Network-first, fall back to cached shell or offline page
-  if (request.mode === 'navigate') {
+  // Navigation requests (/, /landing, /app): Network-first, fall back to cached shell or offline page
+  if (request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/landing' || url.pathname === '/app') {
     event.respondWith(
       fetch(request)
         .then((response) => {
           if (response && response.status === 200) {
-            const responseClone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
+            // Never serve "/" from cache
+            if (url.pathname !== '/') {
+              const responseClone = response.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
+            }
           }
           return response;
         })
@@ -132,6 +135,8 @@ self.addEventListener('fetch', (event) => {
           if (cached) return cached;
           const cachedIndex = await caches.match('/index.html');
           if (cachedIndex) return cachedIndex;
+          const cachedLanding = await caches.match('/landing.html');
+          if (cachedLanding) return cachedLanding;
           return new Response(OFFLINE_PAGE_HTML, {
             headers: { 'Content-Type': 'text/html; charset=utf-8' }
           });
