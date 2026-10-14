@@ -54,11 +54,11 @@
   const STATUS_META = {
     ongoing: { label: 'Class Ongoing', badgeClass: 'badge-ongoing', color: '#10b981' },
     delayed: { label: 'Faculty Delayed', badgeClass: 'badge-delayed', color: '#f59e0b' },
-    absent:  { label: 'Faculty Absent', badgeClass: 'badge-absent', color: '#ef4444' },
-    sub:     { label: 'Substitute Assigned', badgeClass: 'badge-sub', color: '#8b5cf6' },
-    cancelled:{ label: 'Class Cancelled', badgeClass: 'badge-cancelled', color: '#6b7280' },
+    absent: { label: 'Faculty Absent', badgeClass: 'badge-absent', color: '#ef4444' },
+    sub: { label: 'Substitute Assigned', badgeClass: 'badge-sub', color: '#8b5cf6' },
+    cancelled: { label: 'Class Cancelled', badgeClass: 'badge-cancelled', color: '#6b7280' },
     resched: { label: 'Rescheduled', badgeClass: 'badge-resched', color: '#06b6d4' },
-    completed:{ label: 'Completed', badgeClass: 'badge-completed', color: '#10b981' }
+    completed: { label: 'Completed', badgeClass: 'badge-completed', color: '#10b981' }
   };
 
   const CATEGORIES = ['All', 'Tech', 'Cultural', 'Sports', 'Workshop', 'Placement', 'Club', 'Fest', 'Seminar'];
@@ -78,7 +78,7 @@
         this.init();
         if (!this.ctx) return;
         if (this.ctx.state === 'suspended') {
-          this.ctx.resume().catch(() => {});
+          this.ctx.resume().catch(() => { });
           return;
         }
 
@@ -120,7 +120,7 @@
     try {
       AudioEngine.init();
       if (AudioEngine.ctx && AudioEngine.ctx.state === 'suspended') {
-        AudioEngine.ctx.resume().catch(() => {});
+        AudioEngine.ctx.resume().catch(() => { });
       }
     } catch (e) { /* browsers may block AudioContext until a gesture */ }
   }
@@ -316,7 +316,7 @@
   // --- Modal Helpers ---
   function openModal(title, htmlContent) {
     if (html5QrCodeScanner) {
-      try { html5QrCodeScanner.stop(); } catch(e) {}
+      try { html5QrCodeScanner.stop(); } catch (e) { }
       html5QrCodeScanner = null;
     }
 
@@ -331,7 +331,7 @@
 
   function closeModal() {
     if (html5QrCodeScanner) {
-      try { html5QrCodeScanner.stop(); } catch(e) {}
+      try { html5QrCodeScanner.stop(); } catch (e) { }
       html5QrCodeScanner = null;
     }
     const modal = document.getElementById('globalModal');
@@ -566,6 +566,7 @@
 
       const { cls: activeCls, mode } = resolveActiveClass(liveTimetableState);
       const action = computeActionLine(activeCls, mode, liveTimetableState);
+      const currentMins = getCurrentMinutes();
       const isFinished = mode === 'finished';
       const stMeta = isFinished ? STATUS_META.completed : (activeCls ? (STATUS_META[activeCls.st] || STATUS_META.ongoing) : STATUS_META.ongoing);
       const next3Events = (eventsData.events || []).slice(0, 3);
@@ -621,9 +622,28 @@
                     📅 No scheduled classes found for today.
                   </div>
                 ` : liveTimetableState.classes.map(cls => {
-                  const meta = STATUS_META[cls.st] || STATUS_META.ongoing;
-                  const isActive = activeCls && activeCls.id === cls.id;
-                  return `
+        const sMins = parseTimeToMinutes(cls.s);
+        const eMins = parseTimeToMinutes(cls.e);
+        const isPassed = currentMins >= eMins;
+        const isCurrentPeriod = currentMins >= sMins && currentMins < eMins;
+        let meta;
+        if (cls.st === 'cancelled') {
+          meta = STATUS_META.cancelled;
+        } else if (cls.st === 'absent') {
+          meta = STATUS_META.absent;
+        } else if (isPassed) {
+          meta = STATUS_META.completed;
+        } else if (isCurrentPeriod) {
+          meta = STATUS_META[cls.st] || STATUS_META.ongoing;
+        } else {
+          if (cls.st === 'delayed' || cls.st === 'sub' || cls.st === 'resched') {
+            meta = STATUS_META[cls.st];
+          } else {
+            meta = { label: 'Upcoming', badgeClass: 'badge-upcoming', color: '#64748b' };
+          }
+        }
+        const isActive = activeCls && activeCls.id === cls.id;
+        return `
                     <div class="class-card ${isActive ? 'is-active' : ''}" id="card-period-${cls.id}">
                       <div class="card-title-row">
                         <span class="card-time">⏰ ${cls.s} - ${cls.e}</span>
@@ -639,7 +659,7 @@
                       ${cls.note ? `<div style="font-size: 0.75rem; background: rgba(245, 158, 11, 0.08); padding: 4px 8px; border-left: 2px solid #f59e0b; border-radius: 0 4px 4px 0;">💬 ${escapeHtml(cls.note)}</div>` : ''}
                     </div>
                   `;
-                }).join('')}
+      }).join('')}
               </div>
             </section>
           </div>
@@ -692,14 +712,14 @@
                     🎉 All caught up! No pending assignments due.
                   </div>
                 ` : summaryData.todo.map(t => {
-                  const due = new Date(t.due_date);
-                  const now = new Date();
-                  const isOverdue = now > due;
-                  const isDueSoon = !isOverdue && (due - now) < (24 * 3600 * 1000);
-                  const tagClass = isOverdue ? 'due-overdue' : isDueSoon ? 'due-soon' : 'due-normal';
-                  const tagLabel = isOverdue ? 'Overdue' : isDueSoon ? 'Due Soon' : 'Assigned';
+        const due = new Date(t.due_date);
+        const now = new Date();
+        const isOverdue = now > due;
+        const isDueSoon = !isOverdue && (due - now) < (24 * 3600 * 1000);
+        const tagClass = isOverdue ? 'due-overdue' : isDueSoon ? 'due-soon' : 'due-normal';
+        const tagLabel = isOverdue ? 'Overdue' : isDueSoon ? 'Due Soon' : 'Assigned';
 
-                  return `
+        return `
                     <div class="assignment-card" onclick="window.location.hash='#course/${t.course_id}?tab=classwork'" style="cursor: pointer;">
                       <div>
                         <strong>${escapeHtml(t.title)}</strong>
@@ -715,7 +735,7 @@
                       </div>
                     </div>
                   `;
-                }).join('')}
+      }).join('')}
               </div>
             </section>
           </div>
@@ -876,11 +896,11 @@
                   </thead>
                   <tbody>
                     ${atRiskStudents.map(s => {
-                      const isRed = s.riskLevel === 'red' || s.risk_level === 'red';
-                      const isReminded = Boolean(s.reminded || s.remindedToday);
-                      const stuUid = s.id || s.studentId || s.uid;
-                      const cId = s.courseId || s.course_id;
-                      return `
+        const isRed = s.riskLevel === 'red' || s.risk_level === 'red';
+        const isReminded = Boolean(s.reminded || s.remindedToday);
+        const stuUid = s.id || s.studentId || s.uid;
+        const cId = s.courseId || s.course_id;
+        return `
                         <tr>
                           <td>
                             <strong>${escapeHtml(s.name)}</strong>
@@ -925,7 +945,7 @@
                           </td>
                         </tr>
                       `;
-                    }).join('')}
+      }).join('')}
                   </tbody>
                 </table>
               </div>
@@ -1198,32 +1218,32 @@
                   No assignments created yet.
                 </div>
               ` : assignments.map(a => {
-                const due = new Date(a.due_date);
-                let tagClass = 'due-normal';
-                let tagLabel = 'Assigned';
+          const due = new Date(a.due_date);
+          let tagClass = 'due-normal';
+          let tagLabel = 'Assigned';
 
-                if (currentUser.role === 'STUDENT') {
-                  if (a.submission && a.submission.status === 'Graded') {
-                    tagClass = 'due-soon';
-                    tagLabel = `Graded (${a.submission.points}/${a.max_points} pts)`;
-                  } else if (a.submission && (a.submission.status === 'Submitted' || a.submission.status === 'Late')) {
-                    tagClass = a.submission.status === 'Late' ? 'due-overdue' : 'due-soon';
-                    tagLabel = a.submission.status === 'Late' ? 'Submitted Late' : 'Submitted';
-                  } else if (a.isOverdue) {
-                    tagClass = 'due-overdue';
-                    tagLabel = 'Overdue';
-                  } else if (a.isDueSoon) {
-                    tagClass = 'due-soon';
-                    tagLabel = 'Due soon (<24h)';
-                  } else {
-                    tagClass = 'due-normal';
-                    tagLabel = 'Assigned';
-                  }
-                } else {
-                  tagLabel = `${a.submissionsCount} Turned In`;
-                }
+          if (currentUser.role === 'STUDENT') {
+            if (a.submission && a.submission.status === 'Graded') {
+              tagClass = 'due-soon';
+              tagLabel = `Graded (${a.submission.points}/${a.max_points} pts)`;
+            } else if (a.submission && (a.submission.status === 'Submitted' || a.submission.status === 'Late')) {
+              tagClass = a.submission.status === 'Late' ? 'due-overdue' : 'due-soon';
+              tagLabel = a.submission.status === 'Late' ? 'Submitted Late' : 'Submitted';
+            } else if (a.isOverdue) {
+              tagClass = 'due-overdue';
+              tagLabel = 'Overdue';
+            } else if (a.isDueSoon) {
+              tagClass = 'due-soon';
+              tagLabel = 'Due soon (<24h)';
+            } else {
+              tagClass = 'due-normal';
+              tagLabel = 'Assigned';
+            }
+          } else {
+            tagLabel = `${a.submissionsCount} Turned In`;
+          }
 
-                return `
+          return `
                   <div class="assignment-card" style="cursor: pointer;" onclick="window.ClassPulse.openAssignmentDetails(${a.id}, '${courseId}')">
                     <div style="flex: 1;">
                       <div style="display: flex; align-items: center; gap: 8px;">
@@ -1244,7 +1264,7 @@
                     </div>
                   </div>
                 `;
-              }).join('')}
+        }).join('')}
             </div>
           </section>
         `;
@@ -1709,8 +1729,8 @@
       const onTimePct = totalAssignments > 0 ? Math.round((data.assignmentsOnTime / totalAssignments) * 100) : 92;
       const latePct = 100 - onTimePct;
 
-      const checkinPct = (data.eventRegistrationsThisWeek || 0) > 0 
-        ? Math.round(((data.eventCheckinsThisWeek || 0) / data.eventRegistrationsThisWeek) * 100) 
+      const checkinPct = (data.eventRegistrationsThisWeek || 0) > 0
+        ? Math.round(((data.eventCheckinsThisWeek || 0) / data.eventRegistrationsThisWeek) * 100)
         : 35;
 
       const summaryText = `1. Live Directives: ${data.updatesThisWeek} class status updates broadcasted this week (${data.updatesToday} today), saving an estimated ${Number(data.minutesSavedThisWeek).toLocaleString()} student-minutes of dead classroom wait time.\n2. Academic Momentum: ${onTimePct}% assignment on-time submission rate (${data.assignmentsOnTime} on-time vs ${data.assignmentsLate} late) with ${data.avgAttendance}% average attendance (${data.studentsBelow75} students below 75%).\n3. Campus Engagement: ${data.eventRegistrationsThisWeek} event pass registrations and ${data.eventCheckinsThisWeek} verified QR check-ins recorded this week.`;
@@ -1891,19 +1911,19 @@
               </thead>
               <tbody>
                 ${(data.recentUpdates && data.recentUpdates.length > 0) ? data.recentUpdates.map(u => {
-                  const d = new Date(u.created_at);
-                  const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                  const dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-                  let badgeColor = 'var(--primary)';
-                  let badgeLabel = (u.type || '').toUpperCase();
-                  if (u.type === 'absent') { badgeColor = '#ef4444'; badgeLabel = 'FACULTY ABSENT'; }
-                  else if (u.type === 'cancelled') { badgeColor = '#ef4444'; badgeLabel = 'CLASS CANCELLED'; }
-                  else if (u.type === 'delayed') { badgeColor = '#f59e0b'; badgeLabel = 'DELAYED 10M'; }
-                  else if (u.type === 'sub') { badgeColor = '#8b5cf6'; badgeLabel = 'SUBSTITUTE'; }
-                  else if (u.type === 'resched') { badgeColor = '#06b6d4'; badgeLabel = 'RESCHEDULED'; }
-                  else { badgeColor = '#10b981'; badgeLabel = 'ONGOING CONFIRMED'; }
+        const d = new Date(u.created_at);
+        const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        let badgeColor = 'var(--primary)';
+        let badgeLabel = (u.type || '').toUpperCase();
+        if (u.type === 'absent') { badgeColor = '#ef4444'; badgeLabel = 'FACULTY ABSENT'; }
+        else if (u.type === 'cancelled') { badgeColor = '#ef4444'; badgeLabel = 'CLASS CANCELLED'; }
+        else if (u.type === 'delayed') { badgeColor = '#f59e0b'; badgeLabel = 'DELAYED 10M'; }
+        else if (u.type === 'sub') { badgeColor = '#8b5cf6'; badgeLabel = 'SUBSTITUTE'; }
+        else if (u.type === 'resched') { badgeColor = '#06b6d4'; badgeLabel = 'RESCHEDULED'; }
+        else { badgeColor = '#10b981'; badgeLabel = 'ONGOING CONFIRMED'; }
 
-                  return `
+        return `
                     <tr style="border-bottom: 1px solid var(--border-color);">
                       <td style="padding: 8px; color: var(--text-muted); font-size: 0.78rem;">${dateStr} ${timeStr}</td>
                       <td style="padding: 8px; font-weight: 700;">${escapeHtml(u.subject || 'Class')}</td>
@@ -1916,7 +1936,7 @@
                       <td style="padding: 8px; text-align: right; font-weight: 800; color: #10b981;">+${u.minutes_saved} min</td>
                     </tr>
                   `;
-                }).join('') : `
+      }).join('') : `
                   <tr>
                     <td colspan="5" style="text-align: center; padding: 20px; color: var(--text-muted);">
                       No status updates recorded yet. Update any timetable status from the Faculty portal to see live calculation!
@@ -2056,11 +2076,11 @@
                 No campus events found matching your filters.
               </div>
             ` : allEventsData.events.map(ev => {
-              const isEnded = ev.status === 'ended';
-              const isCancelled = ev.status === 'cancelled';
-              const isLive = ev.status === 'live';
+        const isEnded = ev.status === 'ended';
+        const isCancelled = ev.status === 'cancelled';
+        const isLive = ev.status === 'live';
 
-              return `
+        return `
                 <div class="event-item-card" style="--event-color: ${ev.banner_color || '#2563eb'};">
                   <div class="event-card-banner-strip"></div>
                   <div class="event-card-body">
@@ -2122,7 +2142,7 @@
                   </div>
                 </div>
               `;
-            }).join('')}
+      }).join('')}
           </div>
         </section>
       `;
@@ -2250,10 +2270,10 @@
               </div>
             </div>
           ` : data.myEvents.map(ev => {
-            const qrPayload = JSON.stringify({ uid: currentUser.uid, eventId: ev.id, name: currentUser.name });
-            const qrSvg = generateSvgQr(qrPayload);
+        const qrPayload = JSON.stringify({ uid: currentUser.uid, eventId: ev.id, name: currentUser.name });
+        const qrSvg = generateSvgQr(qrPayload);
 
-            return `
+        return `
               <div class="hero-card" style="padding: 20px; border-left: 6px solid ${ev.banner_color || 'var(--primary)'};">
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; align-items: center;">
                   <div>
@@ -2294,7 +2314,7 @@
                 </div>
               </div>
             `;
-          }).join('')}
+      }).join('')}
         </div>
       `;
     } catch (err) {
@@ -2498,7 +2518,7 @@
       timetableAutoRefreshTimer = setInterval(() => {
         const currentHash = (window.location.hash || '').slice(1);
         if (currentHash === 'timetable' && cachedWeeklyData) {
-          fetchApi('/api/timetable/weekly').then(renderWeeklyCalendarContent).catch(() => {});
+          fetchApi('/api/timetable/weekly').then(renderWeeklyCalendarContent).catch(() => { });
         } else {
           clearInterval(timetableAutoRefreshTimer);
           timetableAutoRefreshTimer = null;
@@ -2712,6 +2732,600 @@
     `;
   }
 
+  // --- 16. HOME DASHBOARD (Landing-Page Style) ---
+  async function renderHomeDashboard() {
+    const container = document.getElementById('mainContainer');
+    container.innerHTML = `
+      <div class="loading-spinner-view">
+        <div class="spinner"></div>
+        <p>Loading your campus dashboard...</p>
+      </div>
+    `;
+
+    try {
+      const role = currentUser ? currentUser.role : 'STUDENT';
+      const todayDateStr = new Date().toLocaleDateString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      });
+
+      if (role === 'ADMIN') {
+        // ADMIN HOME DASHBOARD
+        const [rosterData, coursesData, timetableData] = await Promise.all([
+          fetchApi('/api/admin/roster').catch(() => []),
+          fetchApi('/api/admin/courses').catch(() => ({ courses: [] })),
+          fetchApi('/api/admin/timetable').catch(() => [])
+        ]);
+
+        const rosterCount = Array.isArray(rosterData) ? rosterData.length : (rosterData.roster ? rosterData.roster.length : 0);
+        const coursesCount = (coursesData.courses || []).length;
+        const periodsCount = Array.isArray(timetableData) ? timetableData.length : (timetableData.timetable ? timetableData.timetable.length : 0);
+
+        container.innerHTML = `
+          <div class="home-landing-dashboard">
+            <!-- 1. WELCOME HERO -->
+            <section class="home-welcome-hero">
+              <div>
+                <h2 class="home-welcome-title">Welcome back, Administrator ${escapeHtml(currentUser.name)} 🛡️</h2>
+                <p class="home-welcome-sub">ClassPulse Real-Time Operations • Multi-Role Campus Command Center</p>
+              </div>
+              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <span class="user-role-tag">ADMINISTRATOR</span>
+                <span class="home-hero-date-badge">📅 ${escapeHtml(todayDateStr)}</span>
+              </div>
+            </section>
+
+            <!-- 2. CAMPUS PULSE DIRECTIVE CARD -->
+            <section class="hero-card" style="padding: 20px; border-left: 5px solid var(--primary);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span class="directive-pill">CAMPUS OPERATIONS DIRECTIVE</span>
+                <span class="status-badge badge-ongoing">● SYSTEM LIVE</span>
+              </div>
+              <h3 style="font-size: 1.25rem; font-weight: 800; margin-bottom: 6px;">Campus Live Status & Directives Hub</h3>
+              <p style="font-size: 0.88rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 14px;">
+                ${liveTimetableState.notice ? `🚨 <strong>Active Notice:</strong> "${escapeHtml(liveTimetableState.notice)}"` : 'All services active. Monitor live class statuses, roster entries and broadcast directives in real time.'}
+              </p>
+              <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <button type="button" class="btn btn-sm btn-primary" onclick="window.location.hash='#classes'">Manage Class Statuses →</button>
+                <button type="button" class="btn btn-sm btn-secondary" onclick="window.location.hash='#admin'">Roster & Timetable Tools →</button>
+              </div>
+            </section>
+
+            <!-- 3. QUICK STAT CHIPS -->
+            <section class="home-stats-row">
+              <div class="stat-chip-card" onclick="window.location.hash='#admin'" style="cursor: pointer;">
+                <div class="stat-chip-icon">👥</div>
+                <div class="stat-chip-info">
+                  <span class="stat-chip-label">Campus Roster</span>
+                  <span class="stat-chip-val">${rosterCount} Registered</span>
+                </div>
+              </div>
+              <div class="stat-chip-card" onclick="window.location.hash='#classroom'" style="cursor: pointer;">
+                <div class="stat-chip-icon">📚</div>
+                <div class="stat-chip-info">
+                  <span class="stat-chip-label">Active Courses</span>
+                  <span class="stat-chip-val">${coursesCount} Enrolled</span>
+                </div>
+              </div>
+              <div class="stat-chip-card" onclick="window.location.hash='#timetable'" style="cursor: pointer;">
+                <div class="stat-chip-icon">⏰</div>
+                <div class="stat-chip-info">
+                  <span class="stat-chip-label">Master Schedule</span>
+                  <span class="stat-chip-val">${periodsCount} Periods</span>
+                </div>
+              </div>
+              <div class="stat-chip-card" onclick="window.location.hash='#impact'" style="cursor: pointer;">
+                <div class="stat-chip-icon">📈</div>
+                <div class="stat-chip-info">
+                  <span class="stat-chip-label">Campus Pulse</span>
+                  <span class="stat-chip-val" style="color: var(--st-ongoing);">99.8% Active</span>
+                </div>
+              </div>
+            </section>
+
+            <!-- 4. GRID OF FEATURE CARDS -->
+            <section>
+              <div class="section-head mb-2" style="margin-bottom: 12px;">
+                <h3 class="section-title">Campus Features & Tools</h3>
+                <span style="font-size: 0.78rem; color: var(--text-muted);">Quick navigation across administrative modules</span>
+              </div>
+              <div class="home-features-grid">
+                <div class="feature-card" onclick="window.location.hash='#admin'">
+                  <div class="feature-card-header">
+                    <div class="feature-card-icon">🛡️</div>
+                    <div class="feature-card-title">Administrative Panel</div>
+                  </div>
+                  <p class="feature-card-desc">Master roster management, phone verification, CSV batch import and demo data controls.</p>
+                  <div class="feature-card-footer">
+                    <span>Open Admin Panel</span>
+                    <span>→</span>
+                  </div>
+                </div>
+
+                <div class="feature-card" onclick="window.location.hash='#classes'">
+                  <div class="feature-card-header">
+                    <div class="feature-card-icon">⚡</div>
+                    <div class="feature-card-title">Classes & Status Manager</div>
+                  </div>
+                  <p class="feature-card-desc">Override live class statuses, simulated periods, and broadcast urgent campus notices.</p>
+                  <div class="feature-card-footer">
+                    <span>Manage Classes</span>
+                    <span>→</span>
+                  </div>
+                </div>
+
+                <div class="feature-card" onclick="window.location.hash='#timetable'">
+                  <div class="feature-card-header">
+                    <div class="feature-card-icon">📅</div>
+                    <div class="feature-card-title">Weekly Timetable</div>
+                  </div>
+                  <p class="feature-card-desc">University-wide weekly calendar timetable with simulated demo clock controls.</p>
+                  <div class="feature-card-footer">
+                    <span>View Timetable</span>
+                    <span>→</span>
+                  </div>
+                </div>
+
+                <div class="feature-card" onclick="window.location.hash='#classroom'">
+                  <div class="feature-card-header">
+                    <div class="feature-card-icon">📚</div>
+                    <div class="feature-card-title">Google Classroom Hub</div>
+                  </div>
+                  <p class="feature-card-desc">Review university course listings, teaching faculty assignments and student gradebooks.</p>
+                  <div class="feature-card-footer">
+                    <span>Open Classroom</span>
+                    <span>→</span>
+                  </div>
+                </div>
+
+                <div class="feature-card" onclick="window.location.hash='#events'">
+                  <div class="feature-card-header">
+                    <div class="feature-card-icon">🎉</div>
+                    <div class="feature-card-title">Campus Events & Buzz</div>
+                  </div>
+                  <p class="feature-card-desc">Discover campus activities, coordinate organizers and verify digital QR event passes.</p>
+                  <div class="feature-card-footer">
+                    <span>Browse Events</span>
+                    <span>→</span>
+                  </div>
+                </div>
+
+                <div class="feature-card" onclick="window.location.hash='#impact'">
+                  <div class="feature-card-header">
+                    <div class="feature-card-icon">📈</div>
+                    <div class="feature-card-title">Impact Analytics</div>
+                  </div>
+                  <p class="feature-card-desc">Attendance shortage reduction, student engagement growth and real-time metric graphs.</p>
+                  <div class="feature-card-footer">
+                    <span>View Impact</span>
+                    <span>→</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        `;
+        return;
+      }
+
+      if (role === 'FACULTY') {
+        // FACULTY HOME DASHBOARD
+        const [coursesData, atRiskRes] = await Promise.all([
+          fetchApi('/api/courses').catch(() => ({ courses: [] })),
+          fetchApi('/api/faculty/at-risk').catch(() => [])
+        ]);
+
+        const atRiskStudents = Array.isArray(atRiskRes) ? atRiskRes : (atRiskRes.students || atRiskRes.atRisk || []);
+        const myClasses = (liveTimetableState.classes || []).filter(c => c.faculty_id === currentUser.uid);
+        const { cls: activeCls, mode } = resolveActiveClass(liveTimetableState);
+        const currentPeriodForFaculty = myClasses.find(c => activeCls && c.id === activeCls.id) || myClasses[0];
+
+        container.innerHTML = `
+          <div class="home-landing-dashboard">
+            <!-- 1. WELCOME HERO -->
+            <section class="home-welcome-hero">
+              <div>
+                <h2 class="home-welcome-title">Welcome back, Prof. ${escapeHtml(currentUser.name)} 👨‍🏫</h2>
+                <p class="home-welcome-sub">Faculty Classroom Command Center • Live Status Broadcast & Student Engagement</p>
+              </div>
+              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <span class="user-role-tag">FACULTY</span>
+                <span class="home-hero-date-badge">📅 ${escapeHtml(todayDateStr)}</span>
+              </div>
+            </section>
+
+            <!-- 2. RIGHT NOW FACULTY DIRECTIVE & STATUS CHANGER -->
+            <section class="hero-card" style="padding: 20px; border-left: 5px solid var(--primary);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span class="directive-pill">FACULTY DIRECTIVE</span>
+                <span class="status-badge ${currentPeriodForFaculty ? (STATUS_META[currentPeriodForFaculty.st] ? STATUS_META[currentPeriodForFaculty.st].badgeClass : 'badge-ongoing') : 'badge-completed'}">
+                  ● ${currentPeriodForFaculty ? (STATUS_META[currentPeriodForFaculty.st] ? STATUS_META[currentPeriodForFaculty.st].label : 'Class Scheduled') : 'No Scheduled Class'}
+                </span>
+              </div>
+
+              ${currentPeriodForFaculty ? `
+                <div style="margin-bottom: 12px;">
+                  <h3 style="font-size: 1.25rem; font-weight: 800; margin-bottom: 4px;">
+                    ${escapeHtml(currentPeriodForFaculty.sub)} <span style="font-size: 0.85rem; font-weight: 500; color: var(--text-muted); font-family: var(--font-mono);">(${currentPeriodForFaculty.s} - ${currentPeriodForFaculty.e})</span>
+                  </h3>
+                  <div style="font-size: 0.85rem; color: var(--text-muted);">
+                    📍 Room <strong>${escapeHtml(currentPeriodForFaculty.room)}</strong> • Current Status: <strong>${escapeHtml(currentPeriodForFaculty.st)}</strong>
+                  </div>
+                </div>
+
+                <div style="font-size: 0.8rem; font-weight: 700; color: var(--text-muted); margin-bottom: 8px;">One-Click Status Broadcast:</div>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-bottom: 12px;">
+                  <button type="button" class="btn btn-secondary btn-sm" style="border-left: 4px solid var(--st-ongoing);" onclick="window.ClassPulse.quickFacStatus(${currentPeriodForFaculty.id}, 'ongoing')">🟢 Ongoing</button>
+                  <button type="button" class="btn btn-secondary btn-sm" style="border-left: 4px solid var(--st-delayed);" onclick="window.ClassPulse.quickFacStatus(${currentPeriodForFaculty.id}, 'delayed')">🟡 Delayed (+10m)</button>
+                  <button type="button" class="btn btn-secondary btn-sm" style="border-left: 4px solid var(--st-absent);" onclick="window.ClassPulse.quickFacStatus(${currentPeriodForFaculty.id}, 'absent')">🔴 Absent</button>
+                  <button type="button" class="btn btn-secondary btn-sm" style="border-left: 4px solid var(--st-sub);" onclick="window.ClassPulse.quickFacStatus(${currentPeriodForFaculty.id}, 'sub')">🟣 Substitute</button>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-primary" onclick="window.location.hash='#classes'">Open Full Faculty Command Center →</button>
+              ` : `
+                <p style="font-size: 0.88rem; color: var(--text-muted); line-height: 1.5; margin: 0;">
+                  No classes scheduled in today's timetable for your profile. Check your weekly timetable or Google Classroom course assignments.
+                </p>
+              `}
+            </section>
+
+            <!-- 3. QUICK STAT CHIPS -->
+            <section class="home-stats-row">
+              <div class="stat-chip-card" onclick="window.location.hash='#classes'" style="cursor: pointer;">
+                <div class="stat-chip-icon">📋</div>
+                <div class="stat-chip-info">
+                  <span class="stat-chip-label">Periods Today</span>
+                  <span class="stat-chip-val">${myClasses.length} Scheduled</span>
+                </div>
+              </div>
+              <div class="stat-chip-card" onclick="window.location.hash='#classes'" style="cursor: pointer;">
+                <div class="stat-chip-icon">⚠️</div>
+                <div class="stat-chip-info">
+                  <span class="stat-chip-label">At-Risk Students</span>
+                  <span class="stat-chip-val" style="color: ${atRiskStudents.length > 0 ? 'var(--danger)' : 'var(--st-ongoing)'};">${atRiskStudents.length} Flagged</span>
+                </div>
+              </div>
+              <div class="stat-chip-card" onclick="window.location.hash='#classroom'" style="cursor: pointer;">
+                <div class="stat-chip-icon">📚</div>
+                <div class="stat-chip-info">
+                  <span class="stat-chip-label">Assigned Courses</span>
+                  <span class="stat-chip-val">${(coursesData.courses || []).length} Active</span>
+                </div>
+              </div>
+              <div class="stat-chip-card" onclick="window.location.hash='#classes'" style="cursor: pointer;">
+                <div class="stat-chip-icon">⚡</div>
+                <div class="stat-chip-info">
+                  <span class="stat-chip-label">Live Broadcast</span>
+                  <span class="stat-chip-val" style="color: var(--st-ongoing);">Connected</span>
+                </div>
+              </div>
+            </section>
+
+            <!-- 4. GRID OF FEATURE CARDS -->
+            <section>
+              <div class="section-head mb-2" style="margin-bottom: 12px;">
+                <h3 class="section-title">Faculty Workspace Modules</h3>
+                <span style="font-size: 0.78rem; color: var(--text-muted);">Quick navigation to classroom tools</span>
+              </div>
+              <div class="home-features-grid">
+                <div class="feature-card" onclick="window.location.hash='#classes'">
+                  <div class="feature-card-header">
+                    <div class="feature-card-icon">⚡</div>
+                    <div class="feature-card-title">Faculty Command Center</div>
+                  </div>
+                  <p class="feature-card-desc">Broadcast live status changes with context notes, view at-risk student lists and post notices.</p>
+                  <div class="feature-card-footer">
+                    <span>Open Command Center</span>
+                    <span>→</span>
+                  </div>
+                </div>
+
+                <div class="feature-card" onclick="window.location.hash='#timetable'">
+                  <div class="feature-card-header">
+                    <div class="feature-card-icon">📅</div>
+                    <div class="feature-card-title">Weekly Timetable</div>
+                  </div>
+                  <p class="feature-card-desc">Your personalized Monday-to-Saturday teaching schedule with real-time slot indicators.</p>
+                  <div class="feature-card-footer">
+                    <span>View Timetable</span>
+                    <span>→</span>
+                  </div>
+                </div>
+
+                <div class="feature-card" onclick="window.location.hash='#classroom'">
+                  <div class="feature-card-header">
+                    <div class="feature-card-icon">📚</div>
+                    <div class="feature-card-title">Google Classroom Courses</div>
+                  </div>
+                  <p class="feature-card-desc">Grade submissions, post announcements, manage classwork materials & attendance sheets.</p>
+                  <div class="feature-card-footer">
+                    <span>Open Classroom</span>
+                    <span>→</span>
+                  </div>
+                </div>
+
+                <div class="feature-card" onclick="window.location.hash='#events'">
+                  <div class="feature-card-header">
+                    <div class="feature-card-icon">🎉</div>
+                    <div class="feature-card-title">Campus Events</div>
+                  </div>
+                  <p class="feature-card-desc">Browse upcoming technical workshops, college fests and manage event passes.</p>
+                  <div class="feature-card-footer">
+                    <span>Browse Events</span>
+                    <span>→</span>
+                  </div>
+                </div>
+
+                <div class="feature-card" onclick="window.location.hash='#chat'">
+                  <div class="feature-card-header">
+                    <div class="feature-card-icon">💬</div>
+                    <div class="feature-card-title">Course Discussions & Chat</div>
+                  </div>
+                  <p class="feature-card-desc">Real-time messaging channels with students and course cohorts.</p>
+                  <div class="feature-card-footer">
+                    <span>Open Discussions</span>
+                    <span>→</span>
+                  </div>
+                </div>
+
+                <div class="feature-card" onclick="window.location.hash='#my-events'">
+                  <div class="feature-card-header">
+                    <div class="feature-card-icon">🎟️</div>
+                    <div class="feature-card-title">My Event Passes</div>
+                  </div>
+                  <p class="feature-card-desc">Registered campus event badges, verification QR codes and organizer access.</p>
+                  <div class="feature-card-footer">
+                    <span>View Passes</span>
+                    <span>→</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        `;
+        return;
+      }
+
+      // STUDENT HOME DASHBOARD
+      const [coursesData, summaryData, myEventsData] = await Promise.all([
+        fetchApi('/api/courses').catch(() => ({ courses: [] })),
+        fetchApi('/api/student/dashboard-summary').catch(() => ({ alerts: [], todo: [] })),
+        fetchApi('/api/events/my-events').catch(() => ({ registrations: [], passes: [] }))
+      ]);
+
+      const { cls: activeCls, mode } = resolveActiveClass(liveTimetableState);
+      const action = computeActionLine(activeCls, mode, liveTimetableState);
+      const isFinished = mode === 'finished';
+      const stMeta = isFinished ? STATUS_META.completed : (activeCls ? (STATUS_META[activeCls.st] || STATUS_META.ongoing) : STATUS_META.ongoing);
+
+      const hasAttendanceAlert = summaryData.alerts && summaryData.alerts.length > 0;
+      const todoCount = (summaryData.todo || []).length;
+      const passesList = Array.isArray(myEventsData) ? myEventsData : (myEventsData.passes || myEventsData.registrations || []);
+      const passesCount = passesList.length;
+
+      let nextClassText = 'No Classes';
+      if (isFinished) {
+        nextClassText = 'Day Complete';
+      } else if (mode === 'live' && activeCls) {
+        nextClassText = `Ends at ${activeCls.e}`;
+      } else if (activeCls) {
+        nextClassText = `Starts at ${activeCls.s}`;
+      }
+
+      container.innerHTML = `
+        <div class="home-landing-dashboard">
+          <!-- 1. WELCOME HERO -->
+          <section class="home-welcome-hero">
+            <div>
+              <h2 class="home-welcome-title">Welcome back, ${escapeHtml(currentUser.name)} 👋</h2>
+              <p class="home-welcome-sub">Student Portal • CSE-A • Real-Time Classroom & Campus Pulse</p>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+              <span class="user-role-tag">STUDENT</span>
+              <span class="home-hero-date-badge">📅 ${escapeHtml(todayDateStr)}</span>
+            </div>
+          </section>
+
+          <!-- 2. RIGHT NOW DIRECTIVE CARD -->
+          <section class="hero-card st-${isFinished ? 'completed' : (activeCls ? activeCls.st : 'ongoing')}">
+            <div class="hero-top-row">
+              <span class="hero-time-badge">⏰ ${activeCls ? activeCls.s + ' - ' + activeCls.e : '--:-- - --:--'}</span>
+              <span class="status-badge ${stMeta.badgeClass}">● ${stMeta.label}</span>
+            </div>
+
+            <div>
+              <h2 class="hero-subject">${escapeHtml(activeCls ? activeCls.sub : 'No Active Class')}</h2>
+              <div class="hero-meta-row mt-2">
+                <span class="meta-pill">👨‍🏫 Faculty: <strong>${escapeHtml(activeCls ? activeCls.fac : '--')}</strong></span>
+                <span class="meta-pill">📍 Room: <strong>${escapeHtml(activeCls ? activeCls.room : '--')}</strong></span>
+              </div>
+              ${activeCls && activeCls.note ? `<div class="hero-note-callout mt-2">💬 <strong>Faculty Note:</strong> ${escapeHtml(activeCls.note)}</div>` : ''}
+            </div>
+
+            <!-- ACTION LINE DIRECTIVE -->
+            <div class="action-box">
+              <div class="action-top-label">
+                <span class="directive-pill">STUDENT DIRECTIVE</span>
+                <span style="font-size: 0.72rem; color: var(--text-muted);">What to do right now</span>
+              </div>
+              <p class="action-line-main">${escapeHtml(action.primary)}</p>
+              <p class="action-line-sub">${escapeHtml(action.secondary)}</p>
+            </div>
+          </section>
+
+          <!-- 3. QUICK STAT CHIPS -->
+          <section class="home-stats-row">
+            <div class="stat-chip-card" onclick="window.location.hash='#classes'" style="cursor: pointer;">
+              <div class="stat-chip-icon">📊</div>
+              <div class="stat-chip-info">
+                <span class="stat-chip-label">Attendance Status</span>
+                <span class="stat-chip-val" style="color: ${hasAttendanceAlert ? 'var(--danger)' : 'var(--st-ongoing)'};">
+                  ${hasAttendanceAlert ? '⚠️ Shortage (<75%)' : '✅ Good Standing'}
+                </span>
+              </div>
+            </div>
+
+            <div class="stat-chip-card" onclick="window.location.hash='#classes'" style="cursor: pointer;">
+              <div class="stat-chip-icon">⏰</div>
+              <div class="stat-chip-info">
+                <span class="stat-chip-label">Schedule Status</span>
+                <span class="stat-chip-val">${escapeHtml(nextClassText)}</span>
+              </div>
+            </div>
+
+            <div class="stat-chip-card" onclick="window.location.hash='#classroom'" style="cursor: pointer;">
+              <div class="stat-chip-icon">📝</div>
+              <div class="stat-chip-info">
+                <span class="stat-chip-label">Pending Assignments</span>
+                <span class="stat-chip-val">${todoCount} Due</span>
+              </div>
+            </div>
+
+            <div class="stat-chip-card" onclick="window.location.hash='#my-events'" style="cursor: pointer;">
+              <div class="stat-chip-icon">🎟️</div>
+              <div class="stat-chip-info">
+                <span class="stat-chip-label">Event Passes</span>
+                <span class="stat-chip-val">${passesCount} Registered</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- 4. GRID OF FEATURE CARDS -->
+          <section>
+            <div class="section-head mb-2" style="margin-bottom: 12px;">
+              <h3 class="section-title">Explore ClassPulse Features</h3>
+              <span style="font-size: 0.78rem; color: var(--text-muted);">Everything you need for your campus day</span>
+            </div>
+            <div class="home-features-grid">
+              <div class="feature-card" onclick="window.location.hash='#classes'">
+                <div class="feature-card-header">
+                  <div class="feature-card-icon">⚡</div>
+                  <div class="feature-card-title">Classes & Directives</div>
+                </div>
+                <p class="feature-card-desc">Daily 6-period schedule, real-time directive line, attendance alerts and assignment to-do list.</p>
+                <div class="feature-card-footer">
+                  <span>Open Classes Hub</span>
+                  <span>→</span>
+                </div>
+              </div>
+
+              <div class="feature-card" onclick="window.location.hash='#timetable'">
+                <div class="feature-card-header">
+                  <div class="feature-card-icon">📅</div>
+                  <div class="feature-card-title">Weekly Timetable</div>
+                </div>
+                <p class="feature-card-desc">Complete Monday to Saturday calendar timetable grid with ongoing and completed marks.</p>
+                <div class="feature-card-footer">
+                  <span>View Timetable</span>
+                  <span>→</span>
+                </div>
+              </div>
+
+              <div class="feature-card" onclick="window.location.hash='#classroom'">
+                <div class="feature-card-header">
+                  <div class="feature-card-icon">📚</div>
+                  <div class="feature-card-title">Google Classroom</div>
+                </div>
+                <p class="feature-card-desc">Course announcements stream, assignment submissions, grading rubrics and course materials.</p>
+                <div class="feature-card-footer">
+                  <span>Open Classroom</span>
+                  <span>→</span>
+                </div>
+              </div>
+
+              <div class="feature-card" onclick="window.location.hash='#events'">
+                <div class="feature-card-header">
+                  <div class="feature-card-icon">🎉</div>
+                  <div class="feature-card-title">Campus Events</div>
+                </div>
+                <p class="feature-card-desc">Discover upcoming technical hackathons, cultural fests, sports events and register for passes.</p>
+                <div class="feature-card-footer">
+                  <span>Explore Events</span>
+                  <span>→</span>
+                </div>
+              </div>
+
+              <div class="feature-card" onclick="window.location.hash='#chat'">
+                <div class="feature-card-header">
+                  <div class="feature-card-icon">💬</div>
+                  <div class="feature-card-title">Community Chat</div>
+                </div>
+                <p class="feature-card-desc">Course discussions, study group channels, and real-time messaging with classmates.</p>
+                <div class="feature-card-footer">
+                  <span>Join Discussions</span>
+                  <span>→</span>
+                </div>
+              </div>
+
+              <div class="feature-card" onclick="window.location.hash='#my-events'">
+                <div class="feature-card-header">
+                  <div class="feature-card-icon">🎟️</div>
+                  <div class="feature-card-title">My Event Passes</div>
+                </div>
+                <p class="feature-card-desc">Your registered event entry passes, verification QR codes and attendance status badges.</p>
+                <div class="feature-card-footer">
+                  <span>View My Passes</span>
+                  <span>→</span>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      `;
+    } catch (err) {
+      renderErrorState(container, 'Failed to Load Home Dashboard', err.message);
+    }
+  }
+
+  // Mobile drawer helpers
+  function syncMobileDrawerLinks() {
+    const desktopNav = document.getElementById('navLinksMenu');
+    const drawerLinks = document.getElementById('mobileDrawerLinks');
+    if (!desktopNav || !drawerLinks) return;
+
+    drawerLinks.innerHTML = '';
+    const links = desktopNav.querySelectorAll('.nav-menu-item:not(.hidden)');
+    links.forEach(link => {
+      const clone = link.cloneNode(true);
+      clone.removeAttribute('id');
+      clone.addEventListener('click', () => {
+        closeMobileDrawer();
+      });
+      drawerLinks.appendChild(clone);
+    });
+  }
+
+  function openMobileDrawer() {
+    const drawer = document.getElementById('mobileNavDrawer');
+    const backdrop = document.getElementById('mobileNavBackdrop');
+    if (drawer) drawer.classList.remove('hidden');
+    if (backdrop) backdrop.classList.remove('hidden');
+    syncMobileDrawerLinks();
+  }
+
+  function closeMobileDrawer() {
+    const drawer = document.getElementById('mobileNavDrawer');
+    const backdrop = document.getElementById('mobileNavBackdrop');
+    if (drawer) drawer.classList.add('hidden');
+    if (backdrop) backdrop.classList.add('hidden');
+  }
+
+  // Faculty Quick Status broadcast helper
+  window.ClassPulse = window.ClassPulse || {};
+  window.ClassPulse.quickFacStatus = async function (classId, status) {
+    try {
+      await fetchApi('/api/faculty/status', {
+        method: 'POST',
+        body: JSON.stringify({ classId: Number(classId), status, note: '' })
+      });
+      showToast({ title: 'Status Broadcasted', message: `Class marked as ${status}.`, type: 'success' });
+      renderHomeDashboard();
+    } catch (err) {
+      showToast({ title: 'Broadcast Failed', message: err.message, type: 'urgent' });
+    }
+  };
+
   // --- Router ---
   async function router() {
     const hash = window.location.hash || '#';
@@ -2736,7 +3350,8 @@
 
     // Update active navbar highlight and topbar title
     document.querySelectorAll('.nav-menu-item').forEach(el => el.classList.remove('active'));
-    let currentTitle = 'Live Classes & Directives';
+    let currentTitle = 'Classes & Directives';
+    let isHome = false;
     if (path.startsWith('events') || path.startsWith('event/')) {
       const link = document.getElementById('navLinkEvents');
       if (link) link.classList.add('active');
@@ -2752,7 +3367,7 @@
     } else if (path === 'classroom' || path.startsWith('course/')) {
       const link = document.getElementById('navLinkClassroom');
       if (link) link.classList.add('active');
-      currentTitle = 'Classroom & Course Modules';
+      currentTitle = 'Google Classroom';
     } else if (path === 'admin') {
       const link = document.getElementById('navLinkAdmin');
       if (link) link.classList.add('active');
@@ -2765,13 +3380,28 @@
       const link = document.getElementById('navLinkImpact');
       if (link) link.classList.add('active');
       currentTitle = 'Campus Impact Analytics';
-    } else {
+    } else if (path === 'classes') {
       const link = document.getElementById('navLinkHome');
       if (link) link.classList.add('active');
-      currentTitle = 'Live Classes & Directives';
+      currentTitle = 'Classes & Directives';
+    } else {
+      const link = document.getElementById('navLinkLandingHome');
+      if (link) link.classList.add('active');
+      currentTitle = 'Home Dashboard';
+      isHome = true;
     }
-    const pageTitleEl = document.getElementById('topBarPageTitle');
-    if (pageTitleEl) pageTitleEl.textContent = currentTitle;
+
+    // Slim Breadcrumb Bar
+    const breadcrumbBar = document.getElementById('pageBreadcrumbBar');
+    const breadcrumbCurrentEl = document.getElementById('breadcrumbCurrentPage');
+    if (breadcrumbBar) {
+      if (isHome || path === 'login' || path === 'signup') {
+        breadcrumbBar.classList.add('hidden');
+      } else {
+        breadcrumbBar.classList.remove('hidden');
+        if (breadcrumbCurrentEl) breadcrumbCurrentEl.textContent = currentTitle;
+      }
+    }
 
     if (path === 'login') {
       renderLoginView();
@@ -2878,13 +3508,19 @@
       return;
     }
 
-    if (currentUser.role === 'ADMIN') {
-      renderAdminHome();
-    } else if (currentUser.role === 'FACULTY') {
-      renderFacultyHome();
-    } else {
-      renderStudentHome();
+    if (path === 'classes') {
+      if (currentUser.role === 'ADMIN') {
+        renderAdminHome();
+      } else if (currentUser.role === 'FACULTY') {
+        renderFacultyHome();
+      } else {
+        renderStudentHome();
+      }
+      return;
     }
+
+    // Default view: Landing-style Home Dashboard
+    renderHomeDashboard();
   }
 
   function updateNavUserArea() {
@@ -2892,19 +3528,28 @@
     const authLinks = document.getElementById('navAuthLinks');
     const roleTag = document.getElementById('navUserRole');
     const nameTag = document.getElementById('navUserName');
+    const navLinksMenu = document.getElementById('navLinksMenu');
     const myEventsLink = document.getElementById('navLinkMyEvents');
     const adminLink = document.getElementById('navLinkAdmin');
     const impactLink = document.getElementById('navLinkImpact');
     const chatLink = document.getElementById('navLinkChat');
+    const mobileDrawerUserName = document.getElementById('mobileDrawerUserName');
+    const mobileDrawerUserRole = document.getElementById('mobileDrawerUserRole');
+    const mobileDrawerRole = document.getElementById('mobileDrawerRole');
 
     if (currentUser) {
       if (socket && socket.connected) {
         socket.emit('joinUser', { uid: currentUser.uid, role: currentUser.role });
       }
-      userArea.classList.remove('hidden');
-      authLinks.classList.add('hidden');
-      roleTag.textContent = currentUser.role;
-      nameTag.textContent = currentUser.name;
+      if (userArea) userArea.classList.remove('hidden');
+      if (authLinks) authLinks.classList.add('hidden');
+      if (navLinksMenu) navLinksMenu.classList.remove('hidden');
+      if (roleTag) roleTag.textContent = currentUser.role;
+      if (nameTag) nameTag.textContent = currentUser.name;
+      if (mobileDrawerUserName) mobileDrawerUserName.textContent = currentUser.name;
+      if (mobileDrawerUserRole) mobileDrawerUserRole.textContent = currentUser.role;
+      if (mobileDrawerRole) mobileDrawerRole.textContent = currentUser.role;
+
       const userBadge = document.getElementById('navUserBadge');
       if (userBadge) {
         userBadge.style.cursor = 'pointer';
@@ -2929,10 +3574,12 @@
           if (impactLink) impactLink.classList.add('hidden');
         }
       }
+      syncMobileDrawerLinks();
       updateNotifBadge();
     } else {
-      userArea.classList.add('hidden');
-      authLinks.classList.remove('hidden');
+      if (userArea) userArea.classList.add('hidden');
+      if (authLinks) authLinks.classList.remove('hidden');
+      if (navLinksMenu) navLinksMenu.classList.add('hidden');
       if (myEventsLink) myEventsLink.classList.add('hidden');
       if (chatLink) chatLink.classList.add('hidden');
       if (adminLink) adminLink.classList.add('hidden');
@@ -3017,14 +3664,14 @@
       if (currentUser && currentUser.role === 'STUDENT' && isHomePath(hash)) {
         renderStudentHome();
       } else if (hash === '#timetable') {
-        fetchApi('/api/timetable/weekly').then(renderWeeklyCalendarContent).catch(() => {});
+        fetchApi('/api/timetable/weekly').then(renderWeeklyCalendarContent).catch(() => { });
       }
     });
 
     socket.on('simulated_time:updated', () => {
       const hash = window.location.hash || '#';
       if (hash === '#timetable') {
-        fetchApi('/api/timetable/weekly').then(renderWeeklyCalendarContent).catch(() => {});
+        fetchApi('/api/timetable/weekly').then(renderWeeklyCalendarContent).catch(() => { });
       } else if (currentUser && currentUser.role === 'STUDENT' && isHomePath(hash)) {
         renderStudentHome();
       }
@@ -3040,7 +3687,7 @@
 
       const hash = window.location.hash || '#';
       if (hash === '#timetable') {
-        fetchApi('/api/timetable/weekly').then(renderWeeklyCalendarContent).catch(() => {});
+        fetchApi('/api/timetable/weekly').then(renderWeeklyCalendarContent).catch(() => { });
       }
 
       const targetCard = document.getElementById(`card-period-${evt.classId}`);
@@ -3240,7 +3887,7 @@
         badge.classList.add('hidden');
         badge.textContent = '0';
       }
-    } catch (e) {}
+    } catch (e) { }
   }
 
   function getChatDayDivider(ts) {
@@ -3266,7 +3913,7 @@
       appendMessageBubbleToChat(msg);
       scrollChatToBottom();
       if (msg.sender_uid !== currentUser.uid) {
-        fetchApi(`/api/chat/${activeChatId}/read`, { method: 'POST' }).catch(() => {});
+        fetchApi(`/api/chat/${activeChatId}/read`, { method: 'POST' }).catch(() => { });
       }
     } else {
       if (msg.sender_uid !== currentUser.uid) {
@@ -3563,7 +4210,7 @@
           badge.classList.add('hidden');
         }
       }
-    } catch (e) {}
+    } catch (e) { }
   }
 
   async function loadAndRenderConversations() {
@@ -3716,7 +4363,7 @@
               subEl.innerHTML = '<span class="chat-presence-text">Offline</span>';
             }
           }
-        }).catch(() => {});
+        }).catch(() => { });
       }
 
       // Check if target user is blocked
@@ -3726,7 +4373,7 @@
           const bData = await fetchApi('/api/chat/blocked');
           const isBlocked = (bData.blocked || []).some(x => x.uid === otherMemberUid);
           activeOtherBlocked = isBlocked;
-        } catch (e) {}
+        } catch (e) { }
       }
 
       updateChatHeaderState(otherMemberUid);
@@ -3735,7 +4382,7 @@
       scrollChatToBottom();
 
       // Clear unread on server and in cache
-      fetchApi(`/api/chat/${convId}/read`, { method: 'POST' }).catch(() => {});
+      fetchApi(`/api/chat/${convId}/read`, { method: 'POST' }).catch(() => { });
       const cached = chatConversationsCache.find(c => c.id === convId);
       if (cached) cached.unread_count = 0;
       updateChatNavBadge();
@@ -4147,8 +4794,8 @@
     modalBody.innerHTML = `
       <div style="margin-bottom: 12px; font-size: 0.82rem; color: var(--text-muted);">
         ${currentUser.role === 'STUDENT'
-          ? `Search classmates in your section (${escapeHtml(currentUser.section || 'your section')}) or your course faculty by Name, College ID, or exact mobile number.`
-          : 'Search students enrolled in your courses by Name, College ID, or exact mobile number.'}
+        ? `Search classmates in your section (${escapeHtml(currentUser.section || 'your section')}) or your course faculty by Name, College ID, or exact mobile number.`
+        : 'Search students enrolled in your courses by Name, College ID, or exact mobile number.'}
       </div>
       <div class="chat-contact-search-box">
         <input type="text" id="contactSearchQuery" class="chat-search-input" placeholder="Search by name, ID or mobile number..." />
@@ -4975,9 +5622,9 @@
                   </thead>
                   <tbody>
                     ${submissions.map(s => {
-                      const isGraded = s.status === 'Graded';
-                      const badgeClass = isGraded ? 'ongoing' : s.status === 'Late' ? 'absent' : s.status === 'Submitted' ? 'delayed' : 'cancelled';
-                      return `
+            const isGraded = s.status === 'Graded';
+            const badgeClass = isGraded ? 'ongoing' : s.status === 'Late' ? 'absent' : s.status === 'Submitted' ? 'delayed' : 'cancelled';
+            return `
                         <tr>
                           <td><strong>${escapeHtml(s.student_uid)}</strong></td>
                           <td>${escapeHtml(s.student_name)}</td>
@@ -4990,7 +5637,7 @@
                           </td>
                         </tr>
                       `;
-                    }).join('')}
+          }).join('')}
                   </tbody>
                 </table>
               </div>
@@ -5731,11 +6378,11 @@
           try {
             const parsed = JSON.parse(decodedText);
             if (parsed.uid) studentUid = parsed.uid;
-          } catch(e) {}
+          } catch (e) { }
 
           window.ClassPulse.performCheckin(eventId, studentUid);
         },
-        () => {}
+        () => { }
       ).catch(err => {
         console.warn('Camera error:', err);
         alert('Unable to access camera. Please use manual student ID check-in.');
@@ -5751,7 +6398,7 @@
           const stopBtn = document.getElementById('stopScanBtn');
           if (startBtn) startBtn.classList.remove('hidden');
           if (stopBtn) stopBtn.classList.add('hidden');
-        }).catch(() => {});
+        }).catch(() => { });
       }
     },
 
@@ -6135,6 +6782,24 @@
         const input = document.getElementById('assistantInput');
         if (input) sendAssistantMessage(input.value);
       });
+    }
+
+    // Mobile nav drawer toggle & close
+    const mobileNavToggleBtn = document.getElementById('mobileNavToggleBtn');
+    if (mobileNavToggleBtn) {
+      mobileNavToggleBtn.addEventListener('click', openMobileDrawer);
+    }
+    const mobileNavCloseBtn = document.getElementById('mobileNavCloseBtn');
+    if (mobileNavCloseBtn) {
+      mobileNavCloseBtn.addEventListener('click', closeMobileDrawer);
+    }
+    const mobileNavBackdrop = document.getElementById('mobileNavBackdrop');
+    if (mobileNavBackdrop) {
+      mobileNavBackdrop.addEventListener('click', closeMobileDrawer);
+    }
+    const mobileDrawerLogoutBtn = document.getElementById('mobileDrawerLogoutBtn');
+    if (mobileDrawerLogoutBtn) {
+      mobileDrawerLogoutBtn.addEventListener('click', () => window.ClassPulse.logout());
     }
 
     // Route listener
