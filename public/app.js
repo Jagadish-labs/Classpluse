@@ -291,6 +291,34 @@
     `;
   }
 
+  // --- 404 Not Found Page Helper ---
+  function renderNotFoundView() {
+    const container = document.getElementById('mainContainer');
+    if (!container) return;
+    container.innerHTML = `
+      <div class="notfound-wrapper">
+        <div class="notfound-card">
+          <div class="notfound-header">
+            <h1 class="notfound-code">404</h1>
+            <p class="notfound-description">
+              The page you are looking for doesn't exist or has been moved.
+            </p>
+          </div>
+          <div class="notfound-actions">
+            <a href="#/" class="btn btn-primary">
+              <svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+              Home
+            </a>
+            <a href="#classes" class="btn btn-secondary">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon></svg>
+              Explore Classes
+            </a>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   // --- Toast Notifications ---
   function showToast({ title, message, type = 'info' }) {
     const container = document.getElementById('toastContainer');
@@ -3384,11 +3412,13 @@
       const link = document.getElementById('navLinkHome');
       if (link) link.classList.add('active');
       currentTitle = 'Classes & Directives';
-    } else {
+    } else if (path === '' || path === '/' || path === 'home') {
       const link = document.getElementById('navLinkLandingHome');
       if (link) link.classList.add('active');
       currentTitle = 'Home Dashboard';
       isHome = true;
+    } else {
+      currentTitle = '404 - Page Not Found';
     }
 
     // Slim Breadcrumb Bar
@@ -3520,7 +3550,13 @@
     }
 
     // Default view: Landing-style Home Dashboard
-    renderHomeDashboard();
+    if (path === '' || path === '/' || path === 'home') {
+      renderHomeDashboard();
+      return;
+    }
+
+    // Unmatched route: 404 Not Found
+    renderNotFoundView();
   }
 
   function updateNavUserArea() {

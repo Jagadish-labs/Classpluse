@@ -3287,3 +3287,99 @@ h1, h2, h3, h4, h5, h6 {
 .flex-between { display: flex; justify-content: space-between; align-items: center; }
 .gap-2 { gap: var(--space-2); }
 .gap-3 { gap: var(--space-3); }
+
+/* ==========================================================================
+   404 NOT-FOUND PAGE
+   Inspired by shadcn empty-state pattern
+   ========================================================================== */
+.notfound-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 200px);
+  width: 100%;
+  overflow: hidden;
+  padding: 40px 20px;
+  box-sizing: border-box;
+}
+
+.notfound-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  max-width: 420px;
+  width: 100%;
+  padding: 48px 24px;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-card);
+  text-align: center;
+  animation: notfoundFadeIn 0.5s ease both;
+}
+
+.notfound-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.notfound-code {
+  font-size: 8rem;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  color: var(--text-main);
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 20%, rgba(0,0,0,0) 80%);
+  mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 20%, rgba(0,0,0,0) 80%);
+  user-select: none;
+  margin: 0;
+  padding: 0;
+}
+
+.notfound-description {
+  margin-top: -32px;
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.notfound-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.notfound-actions .btn svg {
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+  vertical-align: -2px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@keyframes notfoundFadeIn {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 480px) {
+  .notfound-code {
+    font-size: 5.5rem;
+  }
+  .notfound-description {
+    white-space: normal;
+    margin-top: -20px;
+  }
+  .notfound-card {
+    padding: 32px 16px;
+  }
+}
