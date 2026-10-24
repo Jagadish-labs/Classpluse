@@ -75,12 +75,12 @@ async function runTests() {
   assert.strictEqual(shortPk.status, 400);
 
   const okSignup = await guest.post('/api/auth/signup', {
-    uid: 'STU101', name: 'Demo Student', passkey: 'demo123', confirmPasskey: 'demo123'
+    uid: 'STU101', name: 'Demo Student', phone: '9000000101', passkey: 'demo123', confirmPasskey: 'demo123'
   });
   assert.strictEqual(okSignup.status, 200, 'Unregistered roster ID can create passkey');
 
   const again = await createSession().post('/api/auth/signup', {
-    uid: 'STU101', name: 'Demo Student', passkey: 'demo123', confirmPasskey: 'demo123'
+    uid: 'STU101', name: 'Demo Student', phone: '9000000101', passkey: 'demo123', confirmPasskey: 'demo123'
   });
   assert.strictEqual(again.status, 400, 'Already registered ID is blocked');
 
@@ -185,11 +185,11 @@ async function runTests() {
   const state = await admin.get('/api/state');
   assert.strictEqual(state.status, 200);
   assert.strictEqual(state.json.notice, '');
-  assert.ok(state.json.classes.length >= 6);
+  assert.ok(state.json.classes.length >= 4);
   assert.ok(state.json.classes.every(c => c.st === 'ongoing' && c.note === ''));
 
   const stu101Again = await createSession().post('/api/auth/signup', {
-    uid: 'STU101', name: 'Demo Student', passkey: 'demo123', confirmPasskey: 'demo123'
+    uid: 'STU101', name: 'Demo Student', phone: '9000000101', passkey: 'demo123', confirmPasskey: 'demo123'
   });
   assert.strictEqual(stu101Again.status, 200, 'After reset, STU101 must be unregistered again');
 

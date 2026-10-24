@@ -106,6 +106,10 @@ function clearFailedLogins(raw) {
   if (key) failedLoginsByIdentifier.delete(key);
 }
 
+function clearAllFailedLogins() {
+  failedLoginsByIdentifier.clear();
+}
+
 function generateToken(user) {
   return jwt.sign(
     {
@@ -278,6 +282,7 @@ module.exports = {
   rateLimitLogin,
   recordFailedLogin,
   clearFailedLogins,
+  clearAllFailedLogins,
   generateToken,
   setAuthCookie,
   clearAuthCookie,

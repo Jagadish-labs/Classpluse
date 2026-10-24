@@ -144,15 +144,21 @@ async function runDemoPassVerification() {
     stuSocket.on('class:status_changed', resolve);
   });
 
+  const todayClassesRes = await faculty.get('/api/timetable/today');
+  const targetClass = (todayClassesRes.json && todayClassesRes.json.classes)
+    ? (todayClassesRes.json.classes.find(t => t.faculty_id === 'FAC001') || todayClassesRes.json.classes[0])
+    : null;
+  const targetClassId = targetClass ? targetClass.id : 1;
+
   const statusUpdateRes = await faculty.post('/api/timetable/status', {
-    timetableId: 1,
+    timetableId: targetClassId,
     st: 'absent',
     note: 'Medical leave - study chapter 4'
   });
   assert.strictEqual(statusUpdateRes.status, 200);
 
   const [receivedState, receivedClassStatus] = await Promise.all([stateUpdatePromise, classStatusPromise]);
-  const cls1 = receivedState.classes.find(c => c.id === 1);
+  const cls1 = receivedState.classes.find(c => c.id === targetClassId);
   assert.strictEqual(cls1.st, 'absent');
   assert.strictEqual(cls1.note, 'Medical leave - study chapter 4');
   assert.strictEqual(receivedClassStatus.status, 'absent');

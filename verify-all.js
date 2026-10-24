@@ -65,6 +65,7 @@ async function runEndToEndVerification() {
   const signupRes = await student101.post('/api/auth/signup', {
     uid: 'STU101',
     name: 'Demo Student',
+    phone: '9000000101',
     passkey: 'demo1234',
     confirmPasskey: 'demo1234'
   });

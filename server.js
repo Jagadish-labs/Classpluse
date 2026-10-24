@@ -23,6 +23,7 @@ const {
   rateLimitLogin,
   recordFailedLogin,
   clearFailedLogins,
+  clearAllFailedLogins,
   generateToken,
   setAuthCookie,
   clearAuthCookie,
@@ -297,8 +298,11 @@ app.post('/api/auth/signup', (req, res) => {
 
   // Check Roster
   const rosterEntry = db.prepare('SELECT * FROM roster WHERE uid = ?').get(cleanUid);
-  if (!rosterEntry || rosterEntry.registered) {
-    return res.status(400).json({ error: 'Unable to activate account with provided details' });
+  if (!rosterEntry) {
+    return res.status(400).json({ error: 'College ID not found in authorised campus roster.' });
+  }
+  if (rosterEntry.registered) {
+    return res.status(400).json({ error: 'This ID has already been activated. Please log in.' });
   }
 
   // Verify Name match (case-insensitive)
@@ -2765,6 +2769,7 @@ app.get('/api/config', (req, res) => {
 app.post('/api/admin/reset-demo', authenticate, requireRole('ADMIN'), (req, res) => {
   try {
     seedDatabase(true);
+    clearAllFailedLogins();
     const updated = getFullTimetableState();
     persistDataJson(updated);
     io.emit('state:update', updated);

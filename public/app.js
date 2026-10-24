@@ -52,13 +52,13 @@
   }
 
   const STATUS_META = {
-    ongoing: { label: 'Class Ongoing', badgeClass: 'badge-ongoing', color: '#10b981' },
-    delayed: { label: 'Faculty Delayed', badgeClass: 'badge-delayed', color: '#f59e0b' },
-    absent: { label: 'Faculty Absent', badgeClass: 'badge-absent', color: '#ef4444' },
-    sub: { label: 'Substitute Assigned', badgeClass: 'badge-sub', color: '#8b5cf6' },
-    cancelled: { label: 'Class Cancelled', badgeClass: 'badge-cancelled', color: '#6b7280' },
-    resched: { label: 'Rescheduled', badgeClass: 'badge-resched', color: '#06b6d4' },
-    completed: { label: 'Completed', badgeClass: 'badge-completed', color: '#10b981' }
+    ongoing: { label: 'Class Ongoing', badgeClass: 'badge-ongoing', color: 'var(--secondary)' },
+    delayed: { label: 'Faculty Delayed', badgeClass: 'badge-delayed', color: 'var(--highlight)' },
+    absent: { label: 'Faculty Absent', badgeClass: 'badge-absent', color: 'var(--danger)' },
+    sub: { label: 'Substitute Assigned', badgeClass: 'badge-sub', color: 'var(--primary)' },
+    cancelled: { label: 'Class Cancelled', badgeClass: 'badge-cancelled', color: 'var(--muted)' },
+    resched: { label: 'Rescheduled', badgeClass: 'badge-resched', color: 'var(--secondary)' },
+    completed: { label: 'Completed', badgeClass: 'badge-completed', color: 'var(--secondary)' }
   };
 
   const CATEGORIES = ['All', 'Tech', 'Cultural', 'Sports', 'Workshop', 'Placement', 'Club', 'Fest', 'Seminar'];
@@ -212,7 +212,7 @@
       <path d="M10 10h30v30h-30z M80 10h30v30h-30z M10 80h30v30h-30z" fill="black"/>
       <path d="M15 15h20v20h-20z M85 15h20v20h-20z M15 85h20v20h-20z" fill="white"/>
       <path d="M20 20h10v10h-10z M90 20h10v10h-10z M20 90h10v10h-10z" fill="black"/>
-      <circle cx="60" cy="60" r="12" fill="#2563eb"/>
+      <circle cx="60" cy="60" r="12" fill="var(--primary)"/>
     `;
 
     for (let x = 45; x <= 75; x += 10) {
@@ -667,13 +667,13 @@
           if (cls.st === 'delayed' || cls.st === 'sub' || cls.st === 'resched') {
             meta = STATUS_META[cls.st];
           } else {
-            meta = { label: 'Upcoming', badgeClass: 'badge-upcoming', color: '#64748b' };
+            meta = { label: 'Upcoming', badgeClass: 'badge-upcoming', color: 'var(--muted)' };
           }
         }
         const isActive = activeCls && activeCls.id === cls.id;
         return `
                     <div class="class-card ${isActive ? 'is-active' : ''}" id="card-period-${cls.id}">
-                      <div class="card-title-row">
+                       <div class="card-title-row">
                         <span class="card-time">⏰ ${cls.s} - ${cls.e}</span>
                         <span class="status-badge ${meta.badgeClass}">● ${meta.label}</span>
                       </div>
@@ -684,7 +684,7 @@
                       <div style="font-size: 0.78rem; color: var(--text-muted);">
                         👨‍🏫 ${escapeHtml(cls.fac)}
                       </div>
-                      ${cls.note ? `<div style="font-size: 0.75rem; background: rgba(245, 158, 11, 0.08); padding: 4px 8px; border-left: 2px solid #f59e0b; border-radius: 0 4px 4px 0;">💬 ${escapeHtml(cls.note)}</div>` : ''}
+                      ${cls.note ? `<div style="font-size: 0.75rem; background: color-mix(in srgb, var(--highlight) 14%, transparent); padding: 4px 8px; border-left: 2px solid var(--highlight); border-radius: 0 4px 4px 0;">💬 ${escapeHtml(cls.note)}</div>` : ''}
                     </div>
                   `;
       }).join('')}
@@ -700,7 +700,7 @@
                   <span style="font-size: 1.1rem;">📊</span>
                   <h3 class="section-title">Attendance Status</h3>
                 </div>
-                <span style="font-size: 0.75rem; color: ${(summaryData.alerts && summaryData.alerts.length > 0) ? 'var(--danger)' : '#10b981'}; font-weight: 700;">
+                <span style="font-size: 0.75rem; color: ${(summaryData.alerts && summaryData.alerts.length > 0) ? 'var(--danger)' : 'var(--secondary)'}; font-weight: 700;">
                   ${(summaryData.alerts && summaryData.alerts.length > 0) ? '● Action Required' : '● In Good Standing'}
                 </span>
               </div>
@@ -717,7 +717,7 @@
                   </div>
                 </div>
               ` : `
-                <div style="padding: 14px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: var(--radius-md); font-size: 0.82rem; color: #10b981; display: flex; align-items: center; gap: 8px;">
+                <div style="padding: 14px; background: color-mix(in srgb, var(--secondary) 14%, transparent); border: 1px solid color-mix(in srgb, var(--secondary) 25%, transparent); border-radius: var(--radius-md); font-size: 0.82rem; color: var(--secondary); display: flex; align-items: center; gap: 8px;">
                   <span>🌟</span>
                   <span>All enrolled courses are currently above the mandatory 75% attendance threshold.</span>
                 </div>
@@ -1563,7 +1563,7 @@
           <div class="course-header-banner">
             <div style="display: flex; justify-content: space-between; align-items: flex-start;">
               <span class="course-banner-code">${escapeHtml(course.code)} • Section ${escapeHtml(course.section)}</span>
-              <a href="#classroom" class="btn btn-sm btn-secondary" style="background: rgba(255, 255, 255, 0.2); color: #fff; border: none;">← All Courses</a>
+              <a href="#classroom" class="btn btn-sm btn-secondary" style="background: var(--surface-2); color: var(--text); border: 1px solid var(--border);">← All Courses</a>
             </div>
             <h1 class="course-banner-title">${escapeHtml(course.name)}</h1>
             <div class="course-banner-sub">
@@ -1787,13 +1787,13 @@
         <!-- 5 High-Impact KPI Cards -->
         <div class="impact-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px;">
           <!-- Card 1: Updates -->
-          <div class="hero-card impact-card" style="padding: 18px; border-left: 5px solid #4f46e5;">
+          <div class="hero-card impact-card" style="padding: 18px; border-left: 4px solid var(--primary);">
             <div style="font-size: 0.74rem; font-weight: 800; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em;">Class Status Updates</div>
             <div style="display: flex; align-items: baseline; gap: 8px; margin: 10px 0 4px;">
-              <span style="font-size: 2.1rem; font-weight: 800; color: #4f46e5;">${data.updatesThisWeek}</span>
+              <span style="font-size: 2.1rem; font-weight: 800; color: var(--primary);">${data.updatesThisWeek}</span>
               <span style="font-size: 0.85rem; color: var(--text-muted);">this week</span>
             </div>
-            <div style="font-size: 0.82rem; font-weight: 700; color: var(--success); display: flex; align-items: center; gap: 4px;">
+            <div style="font-size: 0.82rem; font-weight: 700; color: var(--secondary); display: flex; align-items: center; gap: 4px;">
               <span>⚡ ${data.updatesToday} updates sent today</span>
             </div>
             <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 6px;">
@@ -1802,13 +1802,13 @@
           </div>
 
           <!-- Card 2: Student Minutes Saved -->
-          <div class="hero-card impact-card" style="padding: 18px; border-left: 5px solid #10b981;">
+          <div class="hero-card impact-card" style="padding: 18px; border-left: 4px solid var(--secondary);">
             <div style="font-size: 0.74rem; font-weight: 800; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em;">Student Time Saved</div>
             <div style="display: flex; align-items: baseline; gap: 8px; margin: 10px 0 4px;">
-              <span style="font-size: 2.1rem; font-weight: 800; color: #10b981;">${Number(data.minutesSavedThisWeek).toLocaleString()}</span>
+              <span style="font-size: 2.1rem; font-weight: 800; color: var(--secondary);">${Number(data.minutesSavedThisWeek).toLocaleString()}</span>
               <span style="font-size: 0.85rem; color: var(--text-muted);">minutes</span>
             </div>
-            <div style="font-size: 0.82rem; font-weight: 700; color: var(--success);">
+            <div style="font-size: 0.82rem; font-weight: 700; color: var(--secondary);">
               ⏱️ ${Number(data.minutesSavedToday).toLocaleString()} student-mins saved today
             </div>
             <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 6px; line-height: 1.3;">
@@ -1817,14 +1817,14 @@
           </div>
 
           <!-- Card 3: Assignments -->
-          <div class="hero-card impact-card" style="padding: 18px; border-left: 5px solid #06b6d4;">
+          <div class="hero-card impact-card" style="padding: 18px; border-left: 4px solid var(--primary);">
             <div style="font-size: 0.74rem; font-weight: 800; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em;">Assignments On-Time</div>
             <div style="display: flex; align-items: baseline; gap: 8px; margin: 10px 0 4px;">
-              <span style="font-size: 2.1rem; font-weight: 800; color: #06b6d4;">${onTimePct}%</span>
+              <span style="font-size: 2.1rem; font-weight: 800; color: var(--primary);">${onTimePct}%</span>
               <span style="font-size: 0.85rem; color: var(--text-muted);">compliance</span>
             </div>
             <div style="font-size: 0.82rem; color: var(--text-secondary); margin-top: 4px;">
-              <strong style="color: var(--success);">${data.assignmentsOnTime} on time</strong> vs <strong style="color: var(--danger);">${data.assignmentsLate} late</strong>
+              <strong style="color: var(--secondary);">${data.assignmentsOnTime} on time</strong> vs <strong style="color: var(--danger);">${data.assignmentsLate} late</strong>
             </div>
             <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 6px;">
               Across all enrolled classroom courses
@@ -1832,13 +1832,13 @@
           </div>
 
           <!-- Card 4: Attendance -->
-          <div class="hero-card impact-card" style="padding: 18px; border-left: 5px solid #f59e0b;">
+          <div class="hero-card impact-card" style="padding: 18px; border-left: 4px solid var(--highlight);">
             <div style="font-size: 0.74rem; font-weight: 800; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em;">Average Attendance</div>
             <div style="display: flex; align-items: baseline; gap: 8px; margin: 10px 0 4px;">
-              <span style="font-size: 2.1rem; font-weight: 800; color: #f59e0b;">${data.avgAttendance}%</span>
+              <span style="font-size: 2.1rem; font-weight: 800; color: var(--highlight);">${data.avgAttendance}%</span>
               <span style="font-size: 0.85rem; color: var(--text-muted);">overall</span>
             </div>
-            <div style="font-size: 0.82rem; font-weight: 700; color: ${data.studentsBelow75 > 0 ? '#ef4444' : 'var(--success)'};">
+            <div style="font-size: 0.82rem; font-weight: 700; color: ${data.studentsBelow75 > 0 ? 'var(--danger)' : 'var(--secondary)'};">
               ⚠️ ${data.studentsBelow75} students below 75% threshold
             </div>
             <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 6px;">
@@ -1847,13 +1847,13 @@
           </div>
 
           <!-- Card 5: Events -->
-          <div class="hero-card impact-card" style="padding: 18px; border-left: 5px solid #ec4899;">
+          <div class="hero-card impact-card" style="padding: 18px; border-left: 4px solid var(--primary);">
             <div style="font-size: 0.74rem; font-weight: 800; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em;">Event Registrations</div>
             <div style="display: flex; align-items: baseline; gap: 8px; margin: 10px 0 4px;">
-              <span style="font-size: 2.1rem; font-weight: 800; color: #ec4899;">${data.eventRegistrationsThisWeek}</span>
+              <span style="font-size: 2.1rem; font-weight: 800; color: var(--primary);">${data.eventRegistrationsThisWeek}</span>
               <span style="font-size: 0.85rem; color: var(--text-muted);">this week</span>
             </div>
-            <div style="font-size: 0.82rem; font-weight: 700; color: #ec4899;">
+            <div style="font-size: 0.82rem; font-weight: 700; color: var(--primary);">
               🎟️ ${data.eventCheckinsThisWeek} verified check-ins (${checkinPct}%)
             </div>
             <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 6px;">
@@ -1868,21 +1868,21 @@
           <div class="hero-card" style="padding: 20px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
               <h3 style="font-size: 0.98rem; font-weight: 800; margin: 0;">📝 Submission Compliance</h3>
-              <span style="font-size: 0.8rem; font-weight: 700; color: var(--success);">${onTimePct}% On Time</span>
+              <span style="font-size: 0.8rem; font-weight: 700; color: var(--secondary);">${onTimePct}% On Time</span>
             </div>
             
-            <div style="height: 24px; width: 100%; background: rgba(239, 68, 68, 0.2); border-radius: 12px; overflow: hidden; display: flex; margin-bottom: 12px;">
-              <div style="width: ${onTimePct}%; background: linear-gradient(90deg, #10b981, #059669); height: 100%; transition: width 0.5s ease;" title="On Time: ${data.assignmentsOnTime}"></div>
-              <div style="width: ${latePct}%; background: linear-gradient(90deg, #ef4444, #dc2626); height: 100%; transition: width 0.5s ease;" title="Late: ${data.assignmentsLate}"></div>
+            <div style="height: 24px; width: 100%; background: color-mix(in srgb, var(--danger) 14%, transparent); border-radius: var(--radius-control); overflow: hidden; display: flex; margin-bottom: 12px;">
+              <div style="width: ${onTimePct}%; background: var(--secondary); height: 100%; transition: width 0.5s ease;" title="On Time: ${data.assignmentsOnTime}"></div>
+              <div style="width: ${latePct}%; background: var(--danger); height: 100%; transition: width 0.5s ease;" title="Late: ${data.assignmentsLate}"></div>
             </div>
 
             <div style="display: flex; justify-content: space-between; font-size: 0.8rem; flex-wrap: wrap; gap: 8px;">
               <div style="display: flex; align-items: center; gap: 6px;">
-                <span style="display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: #10b981;"></span>
+                <span style="display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--secondary);"></span>
                 <span>On Time: <strong>${data.assignmentsOnTime}</strong> (${onTimePct}%)</span>
               </div>
               <div style="display: flex; align-items: center; gap: 6px;">
-                <span style="display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: #ef4444;"></span>
+                <span style="display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--danger);"></span>
                 <span>Late: <strong>${data.assignmentsLate}</strong> (${latePct}%)</span>
               </div>
             </div>
@@ -1892,19 +1892,19 @@
           <div class="hero-card" style="padding: 20px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
               <h3 style="font-size: 0.98rem; font-weight: 800; margin: 0;">🎉 Event Turnout & Check-Ins</h3>
-              <span style="font-size: 0.8rem; font-weight: 700; color: #ec4899;">${checkinPct}% Scanned</span>
+              <span style="font-size: 0.8rem; font-weight: 700; color: var(--secondary);">${checkinPct}% Scanned</span>
             </div>
 
             <svg viewBox="0 0 360 60" width="100%" height="60" style="display: block;">
               <!-- Registrations Bar -->
-              <rect x="0" y="6" width="350" height="20" rx="5" fill="#3b82f6" fill-opacity="0.25" />
-              <rect x="0" y="6" width="350" height="20" rx="5" fill="#3b82f6" />
-              <text x="10" y="20" fill="#ffffff" font-size="11" font-weight="700">Registrations (${data.eventRegistrationsThisWeek})</text>
+              <rect x="0" y="6" width="350" height="20" rx="4" fill="var(--primary)" fill-opacity="0.2" />
+              <rect x="0" y="6" width="350" height="20" rx="4" fill="var(--primary)" />
+              <text x="10" y="20" fill="var(--on-primary)" font-size="11" font-weight="700">Registrations (${data.eventRegistrationsThisWeek})</text>
 
               <!-- Check-ins Bar -->
-              <rect x="0" y="32" width="350" height="20" rx="5" fill="#ec4899" fill-opacity="0.25" />
-              <rect x="0" y="32" width="${Math.max(25, Math.round((data.eventCheckinsThisWeek / Math.max(1, data.eventRegistrationsThisWeek)) * 350))}" height="20" rx="5" fill="#ec4899" />
-              <text x="10" y="46" fill="#ffffff" font-size="11" font-weight="700">Verified Door Check-Ins (${data.eventCheckinsThisWeek})</text>
+              <rect x="0" y="32" width="350" height="20" rx="4" fill="var(--secondary)" fill-opacity="0.2" />
+              <rect x="0" y="32" width="${Math.max(25, Math.round((data.eventCheckinsThisWeek / Math.max(1, data.eventRegistrationsThisWeek)) * 350))}" height="20" rx="4" fill="var(--secondary)" />
+              <text x="10" y="46" fill="var(--on-primary)" font-size="11" font-weight="700">Verified Door Check-Ins (${data.eventCheckinsThisWeek})</text>
             </svg>
             <div style="font-size: 0.74rem; color: var(--text-muted); margin-top: 6px;">
               Instant digital QR scans confirm physical event entry without manual paper registers.
@@ -1921,7 +1921,7 @@
                 Demonstrating real-time time savings by eliminating dead classroom wait times.
               </p>
             </div>
-            <div style="font-size: 0.8rem; font-weight: 700; color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 4px 10px; border-radius: 6px;">
+            <div style="font-size: 0.8rem; font-weight: 700; color: var(--secondary); background: color-mix(in srgb, var(--secondary) 14%, transparent); padding: 4px 10px; border-radius: var(--radius-control);">
               Total Time Saved: +${Number(data.minutesSavedThisWeek).toLocaleString()} student-min
             </div>
           </div>
@@ -1944,24 +1944,24 @@
         const dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
         let badgeColor = 'var(--primary)';
         let badgeLabel = (u.type || '').toUpperCase();
-        if (u.type === 'absent') { badgeColor = '#ef4444'; badgeLabel = 'FACULTY ABSENT'; }
-        else if (u.type === 'cancelled') { badgeColor = '#ef4444'; badgeLabel = 'CLASS CANCELLED'; }
-        else if (u.type === 'delayed') { badgeColor = '#f59e0b'; badgeLabel = 'DELAYED 10M'; }
-        else if (u.type === 'sub') { badgeColor = '#8b5cf6'; badgeLabel = 'SUBSTITUTE'; }
-        else if (u.type === 'resched') { badgeColor = '#06b6d4'; badgeLabel = 'RESCHEDULED'; }
-        else { badgeColor = '#10b981'; badgeLabel = 'ONGOING CONFIRMED'; }
+        if (u.type === 'absent') { badgeColor = 'var(--danger)'; badgeLabel = 'FACULTY ABSENT'; }
+        else if (u.type === 'cancelled') { badgeColor = 'var(--danger)'; badgeLabel = 'CLASS CANCELLED'; }
+        else if (u.type === 'delayed') { badgeColor = 'var(--warning)'; badgeLabel = 'DELAYED 10M'; }
+        else if (u.type === 'sub') { badgeColor = 'var(--info)'; badgeLabel = 'SUBSTITUTE'; }
+        else if (u.type === 'resched') { badgeColor = 'var(--muted)'; badgeLabel = 'RESCHEDULED'; }
+        else { badgeColor = 'var(--success)'; badgeLabel = 'ONGOING CONFIRMED'; }
 
         return `
                     <tr style="border-bottom: 1px solid var(--border-color);">
                       <td style="padding: 8px; color: var(--text-muted); font-size: 0.78rem;">${dateStr} ${timeStr}</td>
                       <td style="padding: 8px; font-weight: 700;">${escapeHtml(u.subject || 'Class')}</td>
                       <td style="padding: 8px;">
-                        <span style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 800; color: #fff; background: ${badgeColor};">
+                        <span style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 800; color: ${badgeColor}; background: color-mix(in srgb, ${badgeColor} 14%, transparent);">
                           ${badgeLabel}
                         </span>
                       </td>
                       <td style="padding: 8px;">${u.enrolled_count} students</td>
-                      <td style="padding: 8px; text-align: right; font-weight: 800; color: #10b981;">+${u.minutes_saved} min</td>
+                      <td style="padding: 8px; text-align: right; font-weight: 800; color: var(--secondary);">+${u.minutes_saved} min</td>
                     </tr>
                   `;
       }).join('') : `
@@ -2109,7 +2109,7 @@
         const isLive = ev.status === 'live';
 
         return `
-                <div class="event-item-card" style="--event-color: ${ev.banner_color || '#2563eb'};">
+                <div class="event-item-card" style="--event-color: ${ev.banner_color || 'var(--primary)'};">
                   <div class="event-card-banner-strip"></div>
                   <div class="event-card-body">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -2133,7 +2133,7 @@
                     </div>
 
                     ${ev.update_note ? `
-                      <div style="background: rgba(245, 158, 11, 0.1); border-left: 2px solid #f59e0b; padding: 4px 8px; font-size: 0.75rem; border-radius: 0 4px 4px 0;">
+                      <div style="background: color-mix(in srgb, var(--highlight) 14%, transparent); border-left: 2px solid var(--highlight); padding: 4px 8px; font-size: 0.75rem; border-radius: 0 4px 4px 0;">
                         📢 <strong>Update:</strong> ${escapeHtml(ev.update_note)}
                       </div>
                     ` : ''}
@@ -2217,7 +2217,7 @@
             </div>
 
             ${ev.update_note ? `
-              <div style="background: rgba(245, 158, 11, 0.12); border-left: 3px solid #f59e0b; padding: 10px 14px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;">
+              <div style="background: color-mix(in srgb, var(--highlight) 14%, transparent); border-left: 3px solid var(--highlight); padding: 10px 14px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;">
                 📢 <strong>Organizer Update:</strong> ${escapeHtml(ev.update_note)}
               </div>
             ` : ''}
@@ -2624,14 +2624,14 @@
     for (let d = 1; d <= 6; d++) {
       const isToday = (todayDayNum === d && jsDay !== 0);
       const dateStr = (data.weekDates && data.weekDates[d]) ? data.weekDates[d].slice(5) : '';
-      tableHeaderThs += `<th class="${isToday ? 'col-today' : ''}">${DAY_SHORT[d]} ${dateStr ? `(${dateStr})` : ''}${isToday ? ' <span style="font-size: 0.68rem; display:block; color:#10b981;">● TODAY</span>' : ''}</th>`;
+      tableHeaderThs += `<th class="${isToday ? 'col-today' : ''}">${DAY_SHORT[d]} ${dateStr ? `(${dateStr})` : ''}${isToday ? ' <span style="font-size: 0.68rem; display:block; color:var(--secondary);">● TODAY</span>' : ''}</th>`;
     }
 
     let tableRowsHtml = '';
     periods.forEach(p => {
       if (p.isLunch) {
         tableRowsHtml += `
-          <tr style="background: rgba(255, 255, 255, 0.03);">
+          <tr style="background: var(--surface-2);">
             <td class="tt-time-cell" style="font-weight: 700; color: var(--text-dim); text-align: center;" colspan="7">
               🍱 ${p.label}
             </td>
@@ -4257,7 +4257,7 @@
       updateChatNavBadge();
     } catch (err) {
       const list = document.getElementById('chatConversationsList');
-      if (list) list.innerHTML = `<li style="padding: 20px; color: #ef4444; font-size: 0.85rem;">Failed to load conversations: ${escapeHtml(err.message)}</li>`;
+      if (list) list.innerHTML = `<li style="padding: 20px; color: var(--danger); font-size: 0.85rem;">Failed to load conversations: ${escapeHtml(err.message)}</li>`;
     }
   }
 
@@ -4384,7 +4384,7 @@
         const memCount = activeChatData.member_count || 1;
         if (subEl) {
           subEl.innerHTML = activeChatData.announce_only
-            ? `<span>👥 ${memCount} members • <span style="color: #f59e0b; font-weight: 600;">📢 Announcements Only</span></span>`
+            ? `<span>👥 ${memCount} members • <span style="color: var(--highlight); font-weight: 600;">📢 Announcements Only</span></span>`
             : `<span>👥 ${memCount} members</span>`;
         }
       } else {
@@ -5603,9 +5603,9 @@
 
               <!-- Graded Feedback Alert Box -->
               ${isGraded ? `
-                <div style="background: rgba(16, 185, 129, 0.12); border: 1.5px solid var(--st-ongoing); padding: 14px; border-radius: var(--radius-md);">
+                <div style="background: color-mix(in srgb, var(--secondary) 14%, transparent); border: 1px solid var(--secondary); padding: 14px; border-radius: var(--radius-md);">
                   <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <strong style="color: var(--st-ongoing); font-size: 1.1rem;">✅ Graded: ${sub.points} / ${assignment.max_points} pts</strong>
+                    <strong style="color: var(--secondary); font-size: 1.1rem;">✅ Graded: ${sub.points} / ${assignment.max_points} pts</strong>
                     <span style="font-size: 0.72rem; color: var(--text-muted);">${sub.graded_at ? formatRelativeTime(sub.graded_at) : ''}</span>
                   </div>
                   ${sub.feedback ? `<p style="margin-top: 6px; font-size: 0.84rem;">💬 <strong>Faculty Feedback:</strong> "${escapeHtml(sub.feedback)}"</p>` : ''}
@@ -6455,7 +6455,7 @@
         if (resultBox) {
           resultBox.className = 'mt-2 p-2';
           resultBox.innerHTML = `
-            <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid var(--st-ongoing); padding: 8px 12px; border-radius: 6px; color: var(--st-ongoing); font-weight: 700;">
+            <div style="background: color-mix(in srgb, var(--secondary) 14%, transparent); border: 1px solid var(--secondary); padding: 8px 12px; border-radius: 6px; color: var(--secondary); font-weight: 700;">
               ✅ Checked in: ${escapeHtml(res.student.name)} (${escapeHtml(res.student.uid)})
             </div>
           `;
@@ -6469,7 +6469,7 @@
         if (resultBox) {
           resultBox.className = 'mt-2 p-2';
           resultBox.innerHTML = `
-            <div style="background: rgba(239, 68, 68, 0.15); border: 1px solid var(--danger); padding: 8px 12px; border-radius: 6px; color: var(--danger); font-weight: 700;">
+            <div style="background: color-mix(in srgb, var(--danger) 14%, transparent); border: 1px solid var(--danger); padding: 8px 12px; border-radius: 6px; color: var(--danger); font-weight: 700;">
               ❌ ${escapeHtml(err.message)}
             </div>
           `;
