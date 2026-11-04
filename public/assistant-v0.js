@@ -1,6 +1,6 @@
 /* Ask ClassPulse - assistant panel in the "v0 AI chat" theme.
-   Plain JS + CSS, no framework. Self-contained: add one <script src="/assistant-v0.js"></script> before </body>.
-   Talks to POST /api/assistant {message} -> {reply, suggestions}; falls back to POST /api/ask {question} -> {answer}. */
+ Plain JS + CSS, no framework. Self-contained: add one <script src="/assistant-v0.js"></script> before </body>.
+ Talks to POST /api/assistant {message} -> {reply, suggestions}; falls back to POST /api/ask {question} -> {answer}. */
 (function () {
   if (window.__cpv0) return; window.__cpv0 = true;
 
