@@ -30,17 +30,17 @@ npm start
 
 ## 🔑 Demo Login Credentials
 
-| Role | College ID (UID) | Demo Mobile | Default Passkey | Name / Notes |
-| :--- | :--- | :--- | :--- | :--- |
-| **ADMIN** | `ADMIN001` | `9900000001` | `admin123` | System Administrator (Full campus roster, courses, 5s reset) |
-| **FACULTY** | `FAC001` | `9100000001` | `fac123` | Prof. Rao (Data Structures & Software Dev) |
-| **FACULTY** | `FAC002` | `9100000002` | `fac123` | Dr. Meena (Data Communications & Networks) |
-| **FACULTY** | `FAC003` | `9100000003` | `fac123` | Ms. Kavya (UI/UX Design) |
-| **STUDENT** | `STU001` | `9000000001` | `stu123` | Aarav Sharma (Lead Student Organiser, CSE-A) |
-| **STUDENT** | `STU002` | `9000000002` | `stu123` | Ananya Iyer (Student, CSE-A) |
-| **STUDENT** | `STU007` | `9000000007` | `stu123` | Vikram Malhotra (Attendance shortage `<75%` alert) |
-| **SIGNUP DEMO** | `STU101` | `9000000101` | *(not registered)* | Demo Student — roster ID that can still create a passkey |
-| **SIGNUP DEMO** | `FAC101` | `9100000101` | *(not registered)* | Demo Faculty — roster ID that can still create a passkey |
+| Role | College ID (UID) | Default Passkey | Name / Notes |
+| :--- | :--- | :--- | :--- |
+| **ADMIN** | `ADMIN001` | `admin123` | System Administrator (Full campus roster, courses, 5s reset) |
+| **FACULTY** | `FAC001` | `fac123` | Prof. Rao (Data Structures & Software Dev) |
+| **FACULTY** | `FAC002` | `fac123` | Dr. Meena (Data Communications & Networks) |
+| **FACULTY** | `FAC003` | `fac123` | Ms. Kavya (UI/UX Design) |
+| **STUDENT** | `STU001` | `stu123` | Aarav Sharma (Lead Student Organiser, CSE-A) |
+| **STUDENT** | `STU002` | `stu123` | Ananya Iyer (Student, CSE-A) |
+| **STUDENT** | `STU007` | `stu123` | Vikram Malhotra (Attendance shortage `<75%` alert) |
+| **SIGNUP DEMO** | `STU101` | *(not registered)* | Demo Student — roster ID that can still create a passkey |
+| **SIGNUP DEMO** | `FAC101` | *(not registered)* | Demo Faculty — roster ID that can still create a passkey |
 
 ---
 
@@ -150,16 +150,9 @@ Located at `#impact` (accessible from the Admin portal and navigation):
 
 ## 📱 Mobile Number Authentication & Smart Roster
 
-- **Dual-Identifier Login:** Students and faculty can sign in using either their College ID (`UID` like `STU001` or `FAC001`) or their 10-digit mobile number (e.g. `9000000001` or `+919000000001`).
-- **Normalized Format:** Accepts 10 digits starting with 6–9, with or without `+91`, spaces, or dashes, and stores normalized as `+91XXXXXXXXXX`.
-- **Roster Validation & Signup:** Phone numbers originate strictly from the college roster, maintaining the "only college-approved people" rule. If a roster entry contains a mobile number, the first-time activation form requires that exact number to match.
-- **Generic Error Security:** Returns a generic *"Invalid ID/number or passkey"* error on all login and signup failures to prevent phone number or ID enumeration.
-- **Strict Privacy Guarantee:** Phone numbers are returned exclusively to the user themselves (in their private profile modal) and to system administrators on the roster management panel. Phone numbers are never exposed in classroom views, attendance, marks, chat messages, or public API endpoints.
-- **Admin Roster Management:** Bulk import and manual entry support an optional `phone` column with duplicate and format validation reporting row errors.
-
-> [!WARNING]
-> **Fictional Data Notice:**
-> All phone numbers in this repository and demo database are strictly **FICTIONAL demo numbers** (`+91 9000000001` to `+91 9000000012`, `+91 9100000001` to `+91 9100000003`, `+91 9900000001`). Real phone numbers must **NEVER** be committed to the repository.
+- **Dual-Identifier Login:** Students and faculty can sign in using either their College ID (`UID` like `STU001` or `FAC001`) or their 10-digit mobile number.
+- **Roster Validation & Signup:** Unregistered members on the institutional roster (`STU101`, `FAC101`) can self-register, linking their mobile number and setting an account passkey.
+- **Admin Roster Management:** Bulk import and manual entry support verified mobile numbers with database indexing and uniqueness guarantees.
 
 ---
 
@@ -194,5 +187,3 @@ Embedded chat assistant (`#assistant`) tailored with campus data isolation:
 - **Responsive Navigation:** Full desktop sidebar with active route states and a sleek bottom navigation bar on mobile devices.
 - **Dark Mode Support:** Automatic detection and manual toggle persisted via `localStorage`.
 
-#   C l a s s p l u s e  
- 

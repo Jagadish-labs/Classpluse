@@ -8,7 +8,8 @@ const {
   getRoomStates,
   getLocalDateStr,
   getLocalTimeStr,
-  DEFAULT_ROOMS
+  DEFAULT_ROOMS,
+  STATUS_LABELS
 } = require('./rooms');
 
 console.log('🧪 Starting Room Map Logic Test Suite...\n');
@@ -90,6 +91,36 @@ const sampleClassesToday = [
     s: '14:00',
     e: '15:00',
     st: 'absent'
+  },
+  {
+    id: 7,
+    day: 1,
+    room: 'B-210',
+    sub: 'Computer Networks',
+    fac: 'Dr. Meena',
+    s: '10:00',
+    e: '11:00',
+    st: 'resched'
+  },
+  {
+    id: 8,
+    day: 1,
+    room: 'Lab 2',
+    sub: 'Data Structures Lab',
+    fac: 'Prof. Rao',
+    s: '10:00',
+    e: '11:00',
+    st: 'delayed'
+  },
+  {
+    id: 9,
+    day: 1,
+    room: 'Net Lab',
+    sub: 'Special Seminar',
+    fac: 'Guest Speaker',
+    s: '10:00',
+    e: '11:00',
+    st: 'unknown_custom_code'
   }
 ];
 
@@ -98,6 +129,7 @@ test('Case 1: Time between two classes in B-204 (10:10)', () => {
   const states = getRoomStates(sampleClassesToday, '10:10');
   const b204 = states['B-204'];
   assert.strictEqual(b204.status, 'free', 'Room should be free between classes');
+  assert.strictEqual(b204.statusLabel, 'Free');
   assert.strictEqual(b204.currentClass, null, 'No class running right now');
   assert.ok(b204.nextClass, 'Next class should be present');
   assert.strictEqual(b204.nextClass.name, 'Advanced Algorithms');
@@ -142,6 +174,7 @@ test('Case 5A: Cancelled class running now in B-206 (09:20)', () => {
   const states = getRoomStates(sampleClassesToday, '09:20');
   const b206 = states['B-206'];
   assert.strictEqual(b206.status, 'free-absent', 'Cancelled class running now should make room free-absent');
+  assert.strictEqual(b206.statusLabel, 'Class Cancelled', 'Must display exact status label "Class Cancelled"');
   assert.ok(b206.currentClass);
   assert.strictEqual(b206.currentClass.name, 'Data Communications');
   assert.strictEqual(b206.currentClass.status, 'cancelled');
@@ -152,43 +185,70 @@ test('Case 5B: Absent faculty class running now in C-101 (14:30)', () => {
   const states = getRoomStates(sampleClassesToday, '14:30');
   const c101 = states['C-101'];
   assert.strictEqual(c101.status, 'free-absent', 'Absent faculty class running now should make room free-absent');
+  assert.strictEqual(c101.statusLabel, 'Faculty Absent', 'Must display exact label "Faculty Absent"');
   assert.ok(c101.currentClass);
   assert.strictEqual(c101.currentClass.name, 'Software Engineering');
   assert.strictEqual(c101.currentClass.status, 'absent');
 });
 
-// 6. Room with no classes today
-test('Case 6: Room with no classes today (Lab 2 & Net Lab)', () => {
-  const states = getRoomStates(sampleClassesToday, '10:00');
-  const lab2 = states['Lab 2'];
-  const netLab = states['Net Lab'];
-  assert.ok(lab2, 'Lab 2 should be in room list');
-  assert.strictEqual(lab2.status, 'free');
-  assert.strictEqual(lab2.currentClass, null);
-  assert.strictEqual(lab2.nextClass, null);
-  assert.strictEqual(lab2.nextUseTime, null);
-
-  assert.ok(netLab, 'Net Lab should be in room list');
-  assert.strictEqual(netLab.status, 'free');
-  assert.strictEqual(netLab.currentClass, null);
-  assert.strictEqual(netLab.nextClass, null);
+test('Case 5C: Rescheduled class running now in B-210 (10:30)', () => {
+  const states = getRoomStates(sampleClassesToday, '10:30');
+  const b210 = states['B-210'];
+  assert.strictEqual(b210.status, 'free-absent', 'Rescheduled slot is free-absent because room is empty');
+  assert.strictEqual(b210.statusLabel, 'Rescheduled', 'Must display real label "Rescheduled", never "Faculty Absent"');
+  assert.ok(b210.currentClass);
+  assert.strictEqual(b210.currentClass.status, 'resched');
 });
 
-// 7. Substitute class running now
-test('Case 7: Substitute class running now in Design Lab (09:30)', () => {
+// 6. Delayed class running now
+test('Case 6: Delayed class in Lab 2 (10:30)', () => {
+  const states = getRoomStates(sampleClassesToday, '10:30');
+  const lab2 = states['Lab 2'];
+  assert.strictEqual(lab2.status, 'in-use', 'Delayed class stays in-use');
+  assert.strictEqual(lab2.statusLabel, 'Faculty Delayed', 'Label must be "Faculty Delayed"');
+  assert.ok(lab2.currentClass);
+});
+
+// 7. Unknown or missing status code
+test('Case 7: Unknown/missing status code does not throw and falls back to in-use', () => {
+  const states = getRoomStates(sampleClassesToday, '10:30');
+  const netLab = states['Net Lab'];
+  assert.doesNotThrow(() => {
+    getRoomStates(sampleClassesToday, '10:30');
+  });
+  assert.strictEqual(netLab.status, 'in-use', 'Unknown status code falls back to in-use');
+  assert.strictEqual(netLab.statusLabel, 'Class Ongoing', 'Unknown status gets neutral label');
+
+  // Test missing status code (e.g. { room: 'Net Lab', s: '10:00', e: '11:00' })
+  const statesNoSt = getRoomStates([{ room: 'Net Lab', s: '10:00', e: '11:00' }], '10:30');
+  assert.strictEqual(statesNoSt['Net Lab'].status, 'in-use');
+  assert.strictEqual(statesNoSt['Net Lab'].statusLabel, 'Class Ongoing');
+});
+
+// 8. Confirm exactly six canonical codes in STATUS_LABELS
+test('Case 8: Verify exactly six canonical status codes in STATUS_LABELS', () => {
+  const expectedCodes = ['ongoing', 'delayed', 'absent', 'sub', 'cancelled', 'resched'].sort();
+  const actualCodes = Object.keys(STATUS_LABELS).sort();
+  assert.deepStrictEqual(actualCodes, expectedCodes, 'rooms.js must use exactly the six expected status codes');
+});
+
+// 9. Substitute class running now
+test('Case 9: Substitute class running now in Design Lab (09:30)', () => {
   const states = getRoomStates(sampleClassesToday, '09:30');
   const designLab = states['Design Lab'];
   assert.strictEqual(designLab.status, 'substitute', 'Substitute class should produce substitute status');
+  assert.strictEqual(designLab.statusLabel, 'Substitute Assigned');
   assert.ok(designLab.currentClass);
   assert.strictEqual(designLab.currentClass.name, 'UI/UX Workshop');
   assert.strictEqual(designLab.currentClass.status, 'sub');
 });
 
-// 8. Ongoing active class running now
-test('Case 8: Active ongoing class running now in B-204 (09:15)', () => {
+// 10. Active ongoing class running now
+test('Case 10: Active ongoing class running now in B-204 (09:15)', () => {
   const states = getRoomStates(sampleClassesToday, '09:15');
   const b204 = states['B-204'];
   assert.strictEqual(b204.status, 'in-use', 'Active class should produce in-use status');
+  assert.strictEqual(b204.statusLabel, 'Class Ongoing');
   assert.ok(b204.currentClass);
   assert.strictEqual(b204.currentClass.name, 'Data Structures');
   assert.strictEqual(b204.currentClass.start, '09:00');
@@ -196,20 +256,21 @@ test('Case 8: Active ongoing class running now in B-204 (09:15)', () => {
   assert.strictEqual(b204.nextClass.start, '10:55');
 });
 
-// 9. Sunday / empty day - all seeded rooms are free
-test('Case 9: Sunday or empty day with no classes', () => {
+// 11. Sunday / empty day - all seeded rooms are free
+test('Case 11: Sunday or empty day with no classes', () => {
   const states = getRoomStates([], '10:00');
   assert.strictEqual(states.length, DEFAULT_ROOMS.length, 'All default rooms should be returned');
   for (const r of states) {
     assert.strictEqual(r.status, 'free', `Room ${r.room} must be free on empty day`);
+    assert.strictEqual(r.statusLabel, 'Free');
     assert.strictEqual(r.currentClass, null);
     assert.strictEqual(r.nextClass, null);
     assert.strictEqual(r.nextUseTime, null);
   }
 });
 
-// 10. Local clock tests (Rule 2): 00:30 and 23:30 local time check
-test('Case 10: Local clock formatting at 00:30 and 23:30 local time (never UTC/toISOString)', () => {
+// 12. Local clock tests (Rule 2): 00:30 and 23:30 local time check
+test('Case 12: Local clock formatting at 00:30 and 23:30 local time (never UTC/toISOString)', () => {
   // Construct explicit local dates
   const localDate1 = new Date(2026, 10, 4, 0, 30, 0); // Nov 4, 2026 00:30 local
   const timeStr1 = getLocalTimeStr(localDate1);
@@ -237,4 +298,3 @@ console.log(`================================\n`);
 if (failed > 0) {
   process.exit(1);
 }
-

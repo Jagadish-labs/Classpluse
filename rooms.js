@@ -13,6 +13,15 @@ const DEFAULT_ROOMS = [
   'Net Lab'
 ];
 
+const STATUS_LABELS = {
+  ongoing: 'Class Ongoing',
+  delayed: 'Faculty Delayed',
+  absent: 'Faculty Absent',
+  sub: 'Substitute Assigned',
+  cancelled: 'Class Cancelled',
+  resched: 'Rescheduled'
+};
+
 /**
  * Format local date as YYYY-MM-DD from local clock (never UTC / toISOString).
  * @param {Date} [date]
@@ -86,57 +95,71 @@ function getRoomStates(classesToday = [], now = new Date(), allRooms = null) {
     const nextSlot = roomClasses.find(c => c.s > currentTime);
 
     // Determine room status:
-    // "in-use": a class is running now and its status is On (ongoing, delayed, etc.)
-    // "substitute": a class is running now with a substitute
-    // "free-absent": a class is scheduled now but faculty is absent or cancelled, so room is empty
+    // "in-use": a class is running now and its status is On (ongoing, delayed, or unknown/unspecified)
+    // "substitute": a class is running now with a substitute (sub)
+    // "free-absent": a class is scheduled now but faculty is absent, cancelled, or rescheduled
     // "free": nothing scheduled now
     let status = 'free';
     let currentClass = null;
 
     if (currentSlot) {
-      const st = (currentSlot.st || currentSlot.status || 'ongoing').toLowerCase();
+      const rawSt = currentSlot.st || currentSlot.status || 'ongoing';
+      const st = String(rawSt).toLowerCase();
+
       if (st === 'sub') {
         status = 'substitute';
-      } else if (st === 'absent' || st === 'cancelled') {
+      } else if (st === 'absent' || st === 'cancelled' || st === 'resched') {
         status = 'free-absent';
       } else {
+        // ongoing, delayed, or unknown/missing fallback to in-use
         status = 'in-use';
       }
+
+      const statusLabel = STATUS_LABELS[st] || 'Class Ongoing';
 
       currentClass = {
         name: currentSlot.sub || currentSlot.name || currentSlot.subject || '',
         faculty: currentSlot.fac || currentSlot.faculty || '',
         start: currentSlot.s || currentSlot.start || '',
         end: currentSlot.e || currentSlot.end || '',
-        status: currentSlot.st || currentSlot.status || 'ongoing',
+        status: rawSt,
+        statusLabel,
         note: currentSlot.note || ''
       };
     }
 
     let nextClass = null;
     if (nextSlot) {
+      const nextRawSt = nextSlot.st || nextSlot.status || 'ongoing';
+      const nextSt = String(nextRawSt).toLowerCase();
+      const nextStatusLabel = STATUS_LABELS[nextSt] || 'Class Ongoing';
+
       nextClass = {
         name: nextSlot.sub || nextSlot.name || nextSlot.subject || '',
         faculty: nextSlot.fac || nextSlot.faculty || '',
         start: nextSlot.s || nextSlot.start || '',
         end: nextSlot.e || nextSlot.end || '',
-        status: nextSlot.st || nextSlot.status || 'ongoing',
+        status: nextRawSt,
+        statusLabel: nextStatusLabel,
         note: nextSlot.note || ''
       };
     }
 
-    // Next time the room is used (start time of next upcoming class that is not cancelled/absent)
+    // Next time the room is used (start time of next upcoming class where room is occupied: not absent/cancelled/resched)
     const nextActiveSlot = roomClasses.find(c => {
       if (c.s <= currentTime) return false;
-      const st = (c.st || c.status || 'ongoing').toLowerCase();
-      return st !== 'absent' && st !== 'cancelled';
+      const st = String(c.st || c.status || 'ongoing').toLowerCase();
+      return st !== 'absent' && st !== 'cancelled' && st !== 'resched';
     });
 
     const nextUseTime = nextActiveSlot ? nextActiveSlot.s : null;
 
+    const statusLabel = currentClass ? currentClass.statusLabel : 'Free';
+
     const roomState = {
       room,
       status,
+      statusLabel,
       currentClass,
       nextClass,
       nextUseTime,
@@ -155,6 +178,6 @@ module.exports = {
   getRoomStates,
   getLocalDateStr,
   getLocalTimeStr,
-  DEFAULT_ROOMS
+  DEFAULT_ROOMS,
+  STATUS_LABELS
 };
-
