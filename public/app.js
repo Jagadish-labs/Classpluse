@@ -2531,6 +2531,505 @@
     };
   }
 
+  // ============================================================================
+  // ROOM MAP & AVAILABILITY VIEW (Feature)
+  // ============================================================================
+  let roomFilterFreeOnly = false;
+  let roomSelectedTime = null; // null = use simulated/effective now from server
+  let cachedRoomsResponse = null;
+
+  async function renderRoomsView() {
+    const container = document.getElementById('mainContainer');
+    if (!container) return;
+    container.innerHTML = `<div class="loading-spinner-view"><div class="spinner"></div><p>Checking classroom availability...</p></div>`;
+
+    await fetchAndRenderRooms();
+  }
+
+  async function refreshRoomsView() {
+    const hash = window.location.hash || '#';
+    if (hash !== '#rooms') return;
+    await fetchAndRenderRooms(true);
+  }
+
+  async function fetchAndRenderRooms(isBackgroundRefresh = false) {
+    const container = document.getElementById('mainContainer');
+    if (!container) return;
+
+    let url = '/api/rooms/status';
+    if (roomSelectedTime) {
+      url += `?time=${encodeURIComponent(roomSelectedTime)}`;
+    }
+
+    try {
+      const data = await fetchApi(url);
+      cachedRoomsResponse = data;
+      renderRoomsContent(data);
+    } catch (err) {
+      if (!isBackgroundRefresh) {
+        renderErrorState(container, 'Unable to load room availability', err.message || 'Please check your connection and try again.');
+      }
+    }
+  }
+
+  function getBuildingGroup(roomName) {
+    if (typeof roomName === 'string') {
+      if (roomName.startsWith('B-')) return 'Building B (Floor 2)';
+      if (roomName.startsWith('C-')) return 'Building C (Floor 1)';
+      if (roomName.includes('Lab') || roomName.includes('Design')) return 'Specialized Labs & Studios';
+    }
+    return 'Other Learning Spaces';
+  }
+
+  function renderRoomsContent(data) {
+    const container = document.getElementById('mainContainer');
+    if (!container) return;
+
+    const rooms = Array.isArray(data.rooms) ? data.rooms : [];
+    const currentTimeStr = data.time || '--:--';
+    const isCustomTime = roomSelectedTime !== null;
+
+    // Compute summary metrics
+    let inUseCount = 0;
+    let freeCount = 0;
+    let delayedCount = 0;
+    let subCount = 0;
+
+    for (const r of rooms) {
+      if (r.status === 'in-use') {
+        inUseCount++;
+        if (r.statusLabel === 'Faculty Delayed') delayedCount++;
+      } else if (r.status === 'substitute') {
+        subCount++;
+      } else {
+        // free or free-absent
+        freeCount++;
+      }
+    }
+
+    // Filter rooms if "Free now" active
+    const displayedRooms = roomFilterFreeOnly
+      ? rooms.filter(r => r.status === 'free' || r.status === 'free-absent')
+      : rooms;
+
+    // Clear container
+    container.innerHTML = '';
+
+    const root = document.createElement('div');
+    root.className = 'rooms-container';
+
+    // Header section
+    const header = document.createElement('div');
+    header.className = 'rooms-header';
+
+    const titleGroup = document.createElement('div');
+    titleGroup.className = 'rooms-title-group';
+
+    const h2 = document.createElement('h2');
+    h2.textContent = 'Classroom Floor Map';
+    const subtitle = document.createElement('p');
+    subtitle.className = 'rooms-subtitle';
+    subtitle.textContent = `Real-time occupancy and schedule for campus rooms as of ${currentTimeStr}${isCustomTime ? ' (Filtered time)' : ' (Live now)'}.`;
+
+    titleGroup.appendChild(h2);
+    titleGroup.appendChild(subtitle);
+    header.appendChild(titleGroup);
+    root.appendChild(header);
+
+    // Controls Bar: Summary, Filter & Time Picker
+    const controlsBar = document.createElement('div');
+    controlsBar.className = 'rooms-controls-bar';
+
+    // Summary line
+    const summaryBar = document.createElement('div');
+    summaryBar.className = 'rooms-summary-bar';
+    
+    const summaryText = document.createElement('span');
+    summaryText.textContent = `${inUseCount} rooms in use, ${freeCount} free`;
+    summaryBar.appendChild(summaryText);
+
+    if (delayedCount > 0) {
+      const delayedPill = document.createElement('span');
+      delayedPill.className = 'rooms-summary-pill';
+      delayedPill.style.color = 'var(--st-delayed)';
+      delayedPill.textContent = `${delayedCount} Delayed`;
+      summaryBar.appendChild(delayedPill);
+    }
+    if (subCount > 0) {
+      const subPill = document.createElement('span');
+      subPill.className = 'rooms-summary-pill';
+      subPill.style.color = 'var(--st-sub)';
+      subPill.textContent = `${subCount} Substitute`;
+      summaryBar.appendChild(subPill);
+    }
+    controlsBar.appendChild(summaryBar);
+
+    // "Free now" filter toggle
+    const filterBtn = document.createElement('button');
+    filterBtn.type = 'button';
+    filterBtn.className = `btn btn-sm ${roomFilterFreeOnly ? 'btn-primary' : 'btn-secondary'}`;
+    filterBtn.textContent = roomFilterFreeOnly ? '✓ Free Only' : 'Free now';
+    filterBtn.title = 'Filter to show only currently free rooms';
+    filterBtn.setAttribute('aria-pressed', roomFilterFreeOnly ? 'true' : 'false');
+    filterBtn.onclick = () => {
+      roomFilterFreeOnly = !roomFilterFreeOnly;
+      renderRoomsContent(data);
+    };
+    controlsBar.appendChild(filterBtn);
+
+    // Time Control: "Now" button + time picker
+    const timeGroup = document.createElement('div');
+    timeGroup.className = 'rooms-time-group';
+
+    const nowBtn = document.createElement('button');
+    nowBtn.type = 'button';
+    nowBtn.className = `btn btn-sm ${!isCustomTime ? 'btn-primary' : 'btn-secondary'}`;
+    nowBtn.textContent = 'Now';
+    nowBtn.title = 'Reset to current campus time';
+    nowBtn.onclick = () => {
+      if (roomSelectedTime !== null) {
+        roomSelectedTime = null;
+        fetchAndRenderRooms();
+      }
+    };
+    timeGroup.appendChild(nowBtn);
+
+    const timeLabel = document.createElement('label');
+    timeLabel.className = 'sr-only';
+    timeLabel.textContent = 'Select Time';
+    timeLabel.setAttribute('for', 'roomsTimePicker');
+    timeGroup.appendChild(timeLabel);
+
+    const timePicker = document.createElement('input');
+    timePicker.type = 'time';
+    timePicker.id = 'roomsTimePicker';
+    timePicker.className = 'rooms-time-input';
+    timePicker.value = currentTimeStr;
+    timePicker.title = 'Check future classroom occupancy today';
+    timePicker.onchange = (e) => {
+      const val = e.target.value;
+      if (val) {
+        roomSelectedTime = val;
+        fetchAndRenderRooms();
+      }
+    };
+    timeGroup.appendChild(timePicker);
+
+    controlsBar.appendChild(timeGroup);
+    root.appendChild(controlsBar);
+
+    // Legend Bar
+    const legendBar = document.createElement('div');
+    legendBar.className = 'rooms-legend-bar';
+    legendBar.setAttribute('aria-label', 'Classroom status legend');
+
+    const legendItems = [
+      { label: 'In Use', dotClass: 'legend-dot-ongoing' },
+      { label: 'Faculty Delayed', dotClass: 'legend-dot-delayed' },
+      { label: 'Substitute', dotClass: 'legend-dot-sub' },
+      { label: 'Empty (Absent / Cancelled)', dotClass: 'legend-dot-free-absent' },
+      { label: 'Free', dotClass: 'legend-dot-free' }
+    ];
+
+    for (const item of legendItems) {
+      const itemEl = document.createElement('div');
+      itemEl.className = 'rooms-legend-item';
+
+      const dot = document.createElement('span');
+      dot.className = `rooms-legend-dot ${item.dotClass}`;
+
+      const text = document.createElement('span');
+      text.textContent = item.label;
+
+      itemEl.appendChild(dot);
+      itemEl.appendChild(text);
+      legendBar.appendChild(itemEl);
+    }
+    root.appendChild(legendBar);
+
+    // Empty state if filtered results are 0
+    if (displayedRooms.length === 0) {
+      const emptyCard = document.createElement('div');
+      emptyCard.className = 'empty-state-card';
+      emptyCard.style.padding = '48px 24px';
+      emptyCard.style.textAlign = 'center';
+
+      const icon = document.createElement('div');
+      icon.style.fontSize = '2.5rem';
+      icon.style.marginBottom = '12px';
+      icon.textContent = '🏫';
+
+      const emptyTitle = document.createElement('h3');
+      emptyTitle.style.fontSize = '1.1rem';
+      emptyTitle.style.fontWeight = '700';
+      emptyTitle.style.marginBottom = '6px';
+      emptyTitle.textContent = 'No Free Classrooms Found';
+
+      const emptyDesc = document.createElement('p');
+      emptyDesc.style.fontSize = '0.875rem';
+      emptyDesc.style.color = 'var(--text-muted)';
+      emptyDesc.textContent = 'All classrooms are currently occupied at this time. Try turning off "Free now" or checking a different time.';
+
+      emptyCard.appendChild(icon);
+      emptyCard.appendChild(emptyTitle);
+      emptyCard.appendChild(emptyDesc);
+      root.appendChild(emptyCard);
+      container.appendChild(root);
+      return;
+    }
+
+    // Group rooms logically (Building B, Building C, Labs, etc.)
+    const groupMap = new Map();
+    for (const r of displayedRooms) {
+      const groupName = getBuildingGroup(r.room);
+      if (!groupMap.has(groupName)) groupMap.set(groupName, []);
+      groupMap.get(groupName).push(r);
+    }
+
+    for (const [groupName, groupRooms] of groupMap.entries()) {
+      const section = document.createElement('section');
+      section.className = 'room-group-section';
+
+      const heading = document.createElement('h3');
+      heading.className = 'room-group-heading';
+      heading.textContent = groupName;
+      section.appendChild(heading);
+
+      const grid = document.createElement('div');
+      grid.className = 'room-grid';
+
+      for (const r of groupRooms) {
+        const card = createRoomCard(r);
+        grid.appendChild(card);
+      }
+
+      section.appendChild(grid);
+      root.appendChild(section);
+    }
+
+    container.appendChild(root);
+  }
+
+  function createRoomCard(r) {
+    const card = document.createElement('div');
+    card.tabIndex = 0;
+    card.role = 'button';
+
+    // State styling class
+    let stateClass = 'state-free';
+    let badgeClass = 'room-badge-free';
+
+    if (r.status === 'in-use') {
+      if (r.statusLabel === 'Faculty Delayed') {
+        stateClass = 'state-delayed';
+        badgeClass = 'room-badge-delayed';
+      } else {
+        stateClass = 'state-in-use';
+        badgeClass = 'room-badge-ongoing';
+      }
+    } else if (r.status === 'substitute') {
+      stateClass = 'state-substitute';
+      badgeClass = 'room-badge-sub';
+    } else if (r.status === 'free-absent') {
+      stateClass = 'state-free-absent';
+      badgeClass = 'room-badge-free-absent';
+    }
+
+    card.className = `room-card ${stateClass}`;
+    card.setAttribute('aria-label', `Room ${r.room}, ${r.statusLabel}. Click for full schedule.`);
+
+    // Top Header: Room Name + Status Word Badge
+    const cardHeader = document.createElement('div');
+    cardHeader.className = 'room-card-header';
+
+    const roomName = document.createElement('span');
+    roomName.className = 'room-card-name';
+    roomName.textContent = r.room;
+
+    const badge = document.createElement('span');
+    badge.className = `room-badge ${badgeClass}`;
+    badge.textContent = r.statusLabel;
+
+    cardHeader.appendChild(roomName);
+    cardHeader.appendChild(badge);
+    card.appendChild(cardHeader);
+
+    // Body: Current Class and Faculty
+    const cardBody = document.createElement('div');
+    cardBody.className = 'room-card-body';
+
+    if (r.currentClass) {
+      const classTitle = document.createElement('div');
+      classTitle.className = 'room-card-class';
+      classTitle.textContent = r.currentClass.name;
+
+      const faculty = document.createElement('div');
+      faculty.className = 'room-card-faculty';
+      faculty.textContent = r.currentClass.faculty ? `👤 ${r.currentClass.faculty}` : '';
+
+      const timeSlot = document.createElement('div');
+      timeSlot.className = 'room-card-time';
+      timeSlot.textContent = `🕒 ${r.currentClass.start} – ${r.currentClass.end}`;
+
+      cardBody.appendChild(classTitle);
+      if (r.currentClass.faculty) cardBody.appendChild(faculty);
+      cardBody.appendChild(timeSlot);
+    } else {
+      const freeDesc = document.createElement('div');
+      freeDesc.className = 'room-card-faculty';
+      freeDesc.textContent = 'No class in session';
+      cardBody.appendChild(freeDesc);
+    }
+    card.appendChild(cardBody);
+
+    // Footer: Next class / Next used time
+    const cardFooter = document.createElement('div');
+    cardFooter.className = 'room-card-footer';
+
+    const nextInfo = document.createElement('div');
+    nextInfo.className = 'room-card-next';
+
+    if (r.nextClass) {
+      nextInfo.textContent = `Next: ${r.nextClass.name} (${r.nextClass.start})`;
+    } else {
+      nextInfo.textContent = 'No more classes today';
+    }
+
+    const tapHint = document.createElement('span');
+    tapHint.textContent = 'View details →';
+    tapHint.style.fontSize = '0.7rem';
+    tapHint.style.color = 'var(--primary)';
+
+    cardFooter.appendChild(nextInfo);
+    cardFooter.appendChild(tapHint);
+    card.appendChild(cardFooter);
+
+    // Click / Enter interaction opens details panel
+    const openDetail = () => showRoomDetailModal(r);
+    card.addEventListener('click', openDetail);
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openDetail();
+      }
+    });
+
+    return card;
+  }
+
+  function showRoomDetailModal(r) {
+    const modal = document.getElementById('globalModal');
+    const modalTitle = document.getElementById('modalTitle');
+    const modalBody = document.getElementById('modalBody');
+    if (!modal || !modalTitle || !modalBody) return;
+
+    modalTitle.textContent = `Room ${r.room} Schedule`;
+    modalBody.innerHTML = '';
+
+    const panel = document.createElement('div');
+    panel.className = 'room-detail-panel';
+
+    // 1. Current Status & Class
+    const currRow = document.createElement('div');
+    currRow.className = 'room-detail-row';
+
+    const currLabel = document.createElement('span');
+    currLabel.className = 'room-detail-label';
+    currLabel.textContent = 'Current Occupancy';
+
+    const currVal = document.createElement('span');
+    currVal.className = 'room-detail-val';
+    currVal.textContent = r.statusLabel;
+
+    currRow.appendChild(currLabel);
+    currRow.appendChild(currVal);
+
+    if (r.currentClass) {
+      const classInfo = document.createElement('div');
+      classInfo.style.marginTop = '6px';
+      classInfo.style.fontSize = '0.85rem';
+
+      const strongName = document.createElement('strong');
+      strongName.textContent = r.currentClass.name;
+      classInfo.appendChild(strongName);
+
+      const facSpan = document.createElement('div');
+      facSpan.textContent = r.currentClass.faculty ? `Faculty: ${r.currentClass.faculty}` : '';
+      classInfo.appendChild(facSpan);
+
+      const timeSpan = document.createElement('div');
+      timeSpan.textContent = `Time: ${r.currentClass.start} – ${r.currentClass.end}`;
+      classInfo.appendChild(timeSpan);
+
+      if (r.currentClass.note) {
+        const noteSpan = document.createElement('div');
+        noteSpan.style.fontStyle = 'italic';
+        noteSpan.textContent = `Note: ${r.currentClass.note}`;
+        classInfo.appendChild(noteSpan);
+      }
+
+      currRow.appendChild(classInfo);
+    }
+    panel.appendChild(currRow);
+
+    // 2. Next Class
+    const nextRow = document.createElement('div');
+    nextRow.className = 'room-detail-row';
+
+    const nextLabel = document.createElement('span');
+    nextLabel.className = 'room-detail-label';
+    nextLabel.textContent = 'Next Scheduled Class';
+
+    const nextVal = document.createElement('span');
+    nextVal.className = 'room-detail-val';
+
+    if (r.nextClass) {
+      nextVal.textContent = `${r.nextClass.name} (${r.nextClass.start} – ${r.nextClass.end})`;
+      nextRow.appendChild(nextLabel);
+      nextRow.appendChild(nextVal);
+
+      if (r.nextClass.faculty) {
+        const nextFac = document.createElement('div');
+        nextFac.style.fontSize = '0.8rem';
+        nextFac.style.color = 'var(--text-muted)';
+        nextFac.textContent = `Faculty: ${r.nextClass.faculty}`;
+        nextRow.appendChild(nextFac);
+      }
+    } else {
+      nextVal.textContent = 'None scheduled for the rest of today';
+      nextRow.appendChild(nextLabel);
+      nextRow.appendChild(nextVal);
+    }
+    panel.appendChild(nextRow);
+
+    // 3. Next Used Time
+    const timeRow = document.createElement('div');
+    timeRow.className = 'room-detail-row';
+
+    const timeRowLabel = document.createElement('span');
+    timeRowLabel.className = 'room-detail-label';
+    timeRowLabel.textContent = 'Room Next Used At';
+
+    const timeRowVal = document.createElement('span');
+    timeRowVal.className = 'room-detail-val';
+    timeRowVal.textContent = r.nextUseTime ? r.nextUseTime : 'No more classes today';
+
+    timeRow.appendChild(timeRowLabel);
+    timeRow.appendChild(timeRowVal);
+    panel.appendChild(timeRow);
+
+    // Close button
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn btn-secondary btn-block mt-3';
+    closeBtn.textContent = 'Close';
+    closeBtn.onclick = closeModal;
+    panel.appendChild(closeBtn);
+
+    modalBody.appendChild(panel);
+    modal.classList.remove('hidden');
+  }
+
   async function renderTimetableCalendarView() {
     const container = document.getElementById('mainContainer');
     container.innerHTML = `<div class="loading-spinner-view"><div class="spinner"></div><p>Loading Weekly Timetable...</p></div>`;
@@ -3388,6 +3887,10 @@
       const link = document.getElementById('navLinkTimetable');
       if (link) link.classList.add('active');
       currentTitle = 'Weekly Schedule Timetable';
+    } else if (path === 'rooms') {
+      const link = document.getElementById('navLinkRooms');
+      if (link) link.classList.add('active');
+      currentTitle = 'Classroom Floor Map';
     } else if (path === 'my-events') {
       const link = document.getElementById('navLinkMyEvents');
       if (link) link.classList.add('active');
@@ -3450,6 +3953,11 @@
 
     if (path === 'timetable') {
       renderTimetableCalendarView();
+      return;
+    }
+
+    if (path === 'rooms') {
+      renderRoomsView();
       return;
     }
 
@@ -3701,6 +4209,8 @@
         renderStudentHome();
       } else if (hash === '#timetable') {
         fetchApi('/api/timetable/weekly').then(renderWeeklyCalendarContent).catch(() => { });
+      } else if (hash === '#rooms') {
+        refreshRoomsView();
       }
     });
 
@@ -3710,6 +4220,8 @@
         fetchApi('/api/timetable/weekly').then(renderWeeklyCalendarContent).catch(() => { });
       } else if (currentUser && currentUser.role === 'STUDENT' && isHomePath(hash)) {
         renderStudentHome();
+      } else if (hash === '#rooms') {
+        refreshRoomsView();
       }
     });
 
@@ -3724,6 +4236,8 @@
       const hash = window.location.hash || '#';
       if (hash === '#timetable') {
         fetchApi('/api/timetable/weekly').then(renderWeeklyCalendarContent).catch(() => { });
+      } else if (hash === '#rooms') {
+        refreshRoomsView();
       }
 
       const targetCard = document.getElementById(`card-period-${evt.classId}`);

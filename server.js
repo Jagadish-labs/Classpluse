@@ -14,6 +14,7 @@ const jwt = require('jsonwebtoken');
 const { db, seedDatabase, getImpactMetrics, recordImpactUpdate, addStudentToCourseChat, canDirectChat, isUserBlocked } = require('./db');
 const { resolveActiveClass, computeActionLine, getDirectiveSummary } = require('./directive');
 const { processAssistantMessage } = require('./assistant-engine');
+const { getRoomStates, getLocalDateStr, getLocalTimeStr } = require('./rooms');
 const {
   JWT_SECRET,
   COOKIE_NAME,
@@ -209,6 +210,37 @@ function getFullTimetableState() {
     classes: mergedClasses,
     log: logs.map(l => ({ t: l.text, ts: l.ts }))
   };
+}
+
+function getClassesForTargetDate(dateStr) {
+  const effectiveNow = getEffectiveNow();
+  const todayStr = getLocalDateStr(effectiveNow);
+
+  if (!dateStr || dateStr === todayStr) {
+    return getFullTimetableState().classes;
+  }
+
+  const parts = dateStr.split('-').map(Number);
+  const targetDate = new Date(parts[0], parts[1] - 1, parts[2]);
+  const jsDay = targetDate.getDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
+
+  if (jsDay === 0) {
+    return [];
+  }
+
+  const timetable = db.prepare('SELECT * FROM timetable WHERE day = ? ORDER BY s ASC').all(jsDay);
+  const dailyStatuses = db.prepare('SELECT * FROM daily_class_status WHERE date_str = ?').all(dateStr);
+  const statusMap = new Map(dailyStatuses.map(ds => [ds.slot_id, ds]));
+
+  return timetable.map(cls => {
+    const ds = statusMap.get(cls.id);
+    return {
+      ...cls,
+      st: ds ? ds.st : 'ongoing',
+      note: ds ? ds.note : '',
+      ts: ds ? ds.ts : cls.ts
+    };
+  });
 }
 
 // ============================================================================
@@ -636,6 +668,44 @@ app.get('/api/timetable/weekly', authenticate, (req, res) => {
     classes: weeklyClasses,
     userRole: req.user.role,
     userUid: req.user.uid
+  });
+});
+
+// GET /api/rooms/status?date=YYYY-MM-DD&time=HH:MM (defaults to effective now)
+app.get('/api/rooms/status', authenticate, (req, res) => {
+  const effectiveNow = getEffectiveNow();
+  let dateStr = req.query.date ? String(req.query.date).trim() : '';
+  let timeStr = req.query.time ? String(req.query.time).trim() : '';
+
+  if (dateStr) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      return res.status(400).json({ error: 'Invalid date format. Expected YYYY-MM-DD' });
+    }
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const dateObj = new Date(y, m - 1, d);
+    if (dateObj.getFullYear() !== y || dateObj.getMonth() !== (m - 1) || dateObj.getDate() !== d) {
+      return res.status(400).json({ error: 'Invalid calendar date' });
+    }
+  } else {
+    dateStr = getLocalDateStr(effectiveNow);
+  }
+
+  if (timeStr) {
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(timeStr)) {
+      return res.status(400).json({ error: 'Invalid time format. Expected HH:MM (24-hour)' });
+    }
+  } else {
+    timeStr = getLocalTimeStr(effectiveNow);
+  }
+
+  const classesToday = getClassesForTargetDate(dateStr);
+  const rooms = getRoomStates(classesToday, timeStr);
+
+  res.json({
+    date: dateStr,
+    time: timeStr,
+    effectiveNow: effectiveNow.toISOString(),
+    rooms
   });
 });
 
@@ -4521,3 +4591,5 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('      - Student: STU001   / stu123 (Aarav Sharma - Organiser)');
   console.log('=============================================================\n');
 });
+
+module.exports = { app, server, getFullTimetableState, getClassesForTargetDate };
