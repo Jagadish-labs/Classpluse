@@ -1,5 +1,5 @@
-classpulse.db-shm
-classpulse.db-wal
 node_modules/
 uploads/
 backups/
+classpulse.db-shm
+classpulse.db-wal
