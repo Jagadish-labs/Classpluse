@@ -79,29 +79,14 @@ npm start
 
 ClassPulse is production-ready and can be deployed with Docker or directly on platforms like **Render** and **Railway**.
 
-### Option 1: Deploy on Render
+### Option 1: Deploy on Render (tested)
 
-1. **Push your repository to GitHub**:
-   ```bash
-   git add .
-   git commit -m "ClassPulse production ready"
-   git push origin main
-   ```
-2. **Create a New Web Service on Render**:
-   - Go to [dashboard.render.com](https://dashboard.render.com) and click **New + > Web Service**.
-   - Connect your GitHub repository (or choose **Blueprint** to auto-load `render.yaml`).
-   - Configure settings:
-     - **Environment:** `Node` (or Docker)
-     - **Build Command:** `npm install`
-     - **Start Command:** `npm start`
-     - **Health Check Path:** `/healthz`
-3. **Set Environment Variables**:
-   - `NODE_ENV`: `production`
-   - `DEMO`: `1` (enables one-click demo logins for presentations)
-   - `SECRET`: Generate a secure random string (e.g. `openssl rand -hex 32`)
-   - *(Optional)* `DATA_DIR`: Path to a mounted persistent disk (e.g. `/var/data`)
-4. **Deploy**:
-   - Click **Create Web Service**. Render builds and starts the application listening on `0.0.0.0` with health checks passing on `/healthz`.
+- **Runtime:** Docker (uses the included `Dockerfile`). The Node runtime crashed at start-up with a segmentation fault from `better-sqlite3` 13.x.
+- **Package:** `better-sqlite3` is pinned to `^12` for the Linux deploy (branch `render-fix`).
+- **Environment variables:** `NODE_ENV=production`, `DEMO=1`, `TZ=Asia/Kolkata`, `SECRET=<any long random text>`.
+- **Health check path:** `/healthz`
+- **TZ matters:** Render runs on UTC, so without `TZ` the Rooms page and the "right now" directive show the wrong class.
+- **Live demo:** https://classpulse-docker.onrender.com
 
 ### Option 2: Deploy on Railway
 
@@ -156,6 +141,17 @@ Located at `#impact` (accessible from the Admin portal and navigation):
 
 ---
 
+## 🏫 Classroom Floor Map (Rooms)
+
+- **Page:** `#rooms` ("Rooms" in the top menu). Shows all 7 campus rooms as free or in use, with the class, faculty and time for each.
+- **Status colours:** In Use, Faculty Delayed, Substitute, Empty (Absent / Cancelled, red dashed border) and Free.
+- **Controls:** a **Free only** filter and a **time picker** with a **Now** button, to check rooms at any time of the day.
+- **Live:** updates over Socket.IO when faculty change a class status, with no page refresh.
+- **API:** `GET /api/rooms/status?date=YYYY-MM-DD&time=HH:MM` (login required; defaults to the current local time).
+- **Logic and tests:** `rooms.js` decides each room's state. Run `node test-rooms.js` (14 checks).
+
+---
+
 ## 🗓️ Weekly Timetable & Simulation Engine
 
 - **Comprehensive Weekly Grid:** View weekly period matrices across Monday through Saturday with course codes, titles, room numbers, and faculty details.
@@ -186,4 +182,3 @@ Embedded chat assistant (`#assistant`) tailored with campus data isolation:
 - **Tabular Figures:** Numbers in attendance percentages, marks, and timetables use `tabular-nums` for alignment.
 - **Responsive Navigation:** Full desktop sidebar with active route states and a sleek bottom navigation bar on mobile devices.
 - **Dark Mode Support:** Automatic detection and manual toggle persisted via `localStorage`.
-
