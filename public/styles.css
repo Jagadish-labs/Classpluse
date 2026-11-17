@@ -7671,3 +7671,75 @@ h6 {
     grid-template-columns: 1fr;
   }
 }
+
+/* ==========================================================================
+   MOBILE PHONE LAYOUT FIXES (max-width: 600px)
+   ========================================================================== */
+@media (max-width: 600px) {
+  /* 1. Home welcome heading and hero title */
+  .home-welcome-title,
+  .hero-sub-title,
+  .hero-subject,
+  .hero-subject h2 {
+    font-size: 1.25rem;
+  }
+
+  /* 2. Directive block layout, hint readability, and text sizing */
+  .action-top-label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    align-items: flex-start;
+  }
+
+  .action-top-label span:not(.directive-pill) {
+    font-size: 0.8rem !important;
+  }
+
+  .action-primary,
+  .action-line-main {
+    font-size: 1rem;
+    line-height: 1.5;
+  }
+
+  .action-secondary,
+  .action-line-sub {
+    font-size: 0.9rem;
+    line-height: 1.5;
+  }
+
+  /* 3. Main content bottom padding to prevent assistant button overlap */
+  .main-content {
+    padding-bottom: 96px;
+  }
+
+  /* 4. Smaller floating assistant button */
+  .assistant-fab-btn {
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+
+  /* 5. Rooms page title sizing & non-breaking toolbar wrapping */
+  .rooms-title-group h2 {
+    font-size: 1.5rem;
+  }
+
+  .rooms-controls-bar {
+    flex-wrap: wrap;
+  }
+
+  .rooms-time-group {
+    flex-wrap: wrap;
+  }
+
+  .rooms-time-group label {
+    white-space: nowrap;
+  }
+
+  /* 6. Tighten card padding for hero and schedule cards */
+  .hero-card,
+  .class-card {
+    padding: 14px;
+  }
+}
+
