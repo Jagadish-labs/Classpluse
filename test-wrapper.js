@@ -61,3 +61,4 @@ if (failed > 0) {
 } else {
   process.exit(0);
 }
+
